@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
+import type { JiraAttachment } from '@/jira/types';
+
+const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
 const IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -17,33 +20,90 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     'get_image',
     {
       description:
-        'Fetch an image attachment from Jira by its attachment ID. Use this to retrieve images referenced as [image: id=<id>] in issue descriptions or comments. Returns the image as base64-encoded data.',
+        'Fetch an image attachment from a Jira issue. Accepts either an attachment ID (numeric) or a media file ID (UUID from [image: id=<uuid>] references in descriptions/comments). When using a UUID, the issueKey is required to resolve it.',
       inputSchema: {
-        attachmentId: z
+        issueKey: z
+          .string()
+          .regex(ISSUE_KEY_PATTERN)
+          .describe('The issue key (e.g., PROJ-123). Required to resolve media file UUIDs.'),
+        fileId: z
           .string()
           .describe(
-            'The attachment ID from the [image: id=<id>] reference in issue descriptions or comments',
+            'The attachment ID (numeric) or media file ID (UUID) from [image: id=<id>] references',
           ),
       },
     },
-    async ({ attachmentId }) => {
-      const { base64, mimeType } = await client.getAttachmentContent(attachmentId);
+    async ({ issueKey, fileId }) => {
+      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
+      );
 
-      if (!IMAGE_MIME_TYPES.has(mimeType)) {
+      const att = attachments.fields.attachment.find(
+        (a) => a.id === fileId || a.mediaApiFileId === fileId,
+      );
+
+      if (att === undefined) {
         return {
           content: [
             {
               type: 'text' as const,
-              text: `Attachment ${attachmentId} is not an image (type: ${mimeType})`,
+              text: `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
             },
           ],
           isError: true,
         };
       }
 
+      if (!IMAGE_MIME_TYPES.has(att.mimeType)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Attachment "${att.filename}" is not an image (type: ${att.mimeType})`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const { base64, mimeType } = await client.downloadUrl(att.content, att.mimeType);
       return {
         content: [{ type: 'image' as const, data: base64, mimeType }],
       };
+    },
+  );
+
+  server.registerTool(
+    'list_attachments',
+    {
+      description:
+        'List all attachments on a Jira issue. Useful for discovering images that may not be embedded in the description or comments. Use get_image with the attachment ID to fetch image content.',
+      inputSchema: {
+        issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
+      },
+    },
+    async ({ issueKey }) => {
+      const result = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
+      );
+
+      const attachments = result.fields.attachment;
+      if (attachments.length === 0) {
+        return { content: [{ type: 'text' as const, text: `No attachments on ${issueKey}` }] };
+      }
+
+      const lines: string[] = [`Attachments on ${issueKey} (${String(attachments.length)}):`, ''];
+      for (const att of attachments) {
+        const isImage = IMAGE_MIME_TYPES.has(att.mimeType);
+        const tag = isImage ? ' [image]' : '';
+        const mediaId =
+          att.mediaApiFileId !== undefined ? `, mediaFileId=${att.mediaApiFileId}` : '';
+        lines.push(
+          `- ${att.filename} (id=${att.id}${mediaId}, ${att.mimeType}, ${String(Math.round(att.size / 1024))}KB)${tag}`,
+        );
+      }
+
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
     },
   );
 }

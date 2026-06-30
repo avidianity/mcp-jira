@@ -150,6 +150,18 @@ export interface JiraCommentPage {
   comments: JiraComment[];
 }
 
+export interface JiraAttachment {
+  id: string;
+  self: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  created: string;
+  content: string;
+  author: JiraUser;
+  mediaApiFileId?: string | undefined;
+}
+
 export interface JiraTransition {
   id: string;
   name: string;

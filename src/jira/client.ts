@@ -85,8 +85,12 @@ export class JiraClient {
       content: string;
     }>(`/rest/api/3/attachment/${attachmentId}`);
 
+    return this.downloadUrl(meta.content, meta.mimeType);
+  }
+
+  async downloadUrl(url: string, mimeType: string): Promise<{ base64: string; mimeType: string }> {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const response = await fetch(meta.content, {
+      const response = await fetch(url, {
         headers: { Authorization: this.authHeader },
       });
 
@@ -101,12 +105,12 @@ export class JiraClient {
       }
 
       if (!response.ok) {
-        throw new Error(`Failed to download attachment (${String(response.status)})`);
+        throw new Error(`Failed to download (${String(response.status)})`);
       }
 
       const buffer = await response.arrayBuffer();
       const base64 = Buffer.from(buffer).toString('base64');
-      return { base64, mimeType: meta.mimeType };
+      return { base64, mimeType };
     }
 
     throw new Error('Exhausted retries without returning');
