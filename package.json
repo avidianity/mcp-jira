@@ -1,0 +1,62 @@
+{
+    "name": "@avidian/mcp-jira",
+    "version": "0.1.0",
+    "description": "MCP server for Jira Cloud — gives AI agents full context and control over Jira issues, projects, sprints, and workflows.",
+    "type": "module",
+    "main": "dist/index.js",
+    "bin": {
+        "mcp-jira": "dist/index.js"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "dev": "bun run src/index.ts",
+        "build": "bun build src/index.ts --target node --outfile dist/index.js --packages=external && node -e \"const fs=require('fs');const f='dist/index.js';const c=fs.readFileSync(f,'utf8');fs.writeFileSync(f,'#!/usr/bin/env node\\n'+c);fs.chmodSync(f,0o755)\"",
+        "compile": "bun build src/index.ts --compile --outfile dist/mcp-jira",
+        "compile:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/mcp-jira-linux-x64",
+        "compile:macos-arm64": "bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/mcp-jira-macos-arm64",
+        "compile:macos-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --outfile dist/mcp-jira-macos-x64",
+        "compile:all": "bun run compile:linux-x64 && bun run compile:macos-arm64 && bun run compile:macos-x64",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "typecheck": "tsc -b",
+        "check": "bun run typecheck && bun run lint && bun run format:check",
+        "prepublishOnly": "bun run check && bun run build"
+    },
+    "dependencies": {
+        "@fastify/cors": "^11.2.0",
+        "@modelcontextprotocol/sdk": "^1.12.0",
+        "commander": "^15.0.0",
+        "fastify": "^5.9.0",
+        "zod": "^3.25.0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.29.0",
+        "@types/node": "^22.15.0",
+        "eslint": "^9.29.0",
+        "eslint-config-prettier": "^10.1.0",
+        "prettier": "^3.5.0",
+        "typescript": "^5.8.0",
+        "typescript-eslint": "^8.34.0"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "keywords": [
+        "mcp",
+        "jira",
+        "atlassian",
+        "ai",
+        "model-context-protocol",
+        "agent"
+    ],
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/avidianity/mcp-jira.git"
+    },
+    "author": "avidian"
+}
