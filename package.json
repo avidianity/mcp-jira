@@ -24,7 +24,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -b",
     "check": "bun run typecheck && bun run lint && bun run format:check",
-    "prepublishOnly": "bun run check && bun run build"
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

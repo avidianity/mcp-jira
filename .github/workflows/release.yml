@@ -18,15 +18,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - run: bun install --frozen-lockfile
 
-      - run: bun run typecheck
-
-      - run: bun run lint
+      - run: bun run check
 
   compile:
     name: Compile Binaries
@@ -117,9 +111,6 @@ jobs:
           fi
 
       - run: bun install --frozen-lockfile
-        if: steps.check_npm.outputs.exists == 'false'
-
-      - run: bun run build
         if: steps.check_npm.outputs.exists == 'false'
 
       - run: npm publish --access public
