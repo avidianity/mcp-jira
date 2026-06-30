@@ -96,8 +96,8 @@ async function main(): Promise<void> {
     });
 
     await app.listen({ port, host: '0.0.0.0' });
-    console.error(`@avidian/mcp-jira server listening on http://localhost:${String(port)}`);
-    console.error(`  MCP endpoint: http://localhost:${String(port)}/mcp`);
+    console.info(`@avidian/mcp-jira server listening on http://localhost:${String(port)}`);
+    console.info(`  MCP endpoint: http://localhost:${String(port)}/mcp`);
   } else {
     console.error(`Unknown transport: ${transportName}. Use 'stdio' or 'http'.`);
     process.exit(1);
