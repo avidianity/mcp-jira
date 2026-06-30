@@ -76,6 +76,41 @@ export class JiraClient {
       body: JSON.stringify(body),
     });
   }
+
+  async getAttachmentContent(attachmentId: string): Promise<{ base64: string; mimeType: string }> {
+    const meta = await this.get<{
+      id: string;
+      filename: string;
+      mimeType: string;
+      content: string;
+    }>(`/rest/api/3/attachment/${attachmentId}`);
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const response = await fetch(meta.content, {
+        headers: { Authorization: this.authHeader },
+      });
+
+      if (response.status === 429) {
+        if (attempt === MAX_RETRIES) {
+          throw new Error(`Jira API rate limited after ${String(MAX_RETRIES)} retries`);
+        }
+        const retryAfter = response.headers.get('Retry-After');
+        const waitMs = retryAfter !== null ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to download attachment (${String(response.status)})`);
+      }
+
+      const buffer = await response.arrayBuffer();
+      const base64 = Buffer.from(buffer).toString('base64');
+      return { base64, mimeType: meta.mimeType };
+    }
+
+    throw new Error('Exhausted retries without returning');
+  }
 }
 
 function sleep(ms: number): Promise<void> {

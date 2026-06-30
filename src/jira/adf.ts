@@ -116,7 +116,7 @@ function convertNode(node: AdfNode, context?: ListContext): string {
 
     case 'mediaSingle':
     case 'mediaGroup':
-      return '[media]\n\n';
+      return convertMediaNodes(node.content ?? []);
 
     default:
       if (node.content !== undefined) {
@@ -124,6 +124,40 @@ function convertNode(node: AdfNode, context?: ListContext): string {
       }
       return '';
   }
+}
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff']);
+
+function isImageFilename(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
+function convertMediaNodes(nodes: AdfNode[]): string {
+  const parts: string[] = [];
+  for (const node of nodes) {
+    if (node.type === 'media') {
+      const id = typeof node.attrs?.['id'] === 'string' ? node.attrs['id'] : undefined;
+      const mediaType = typeof node.attrs?.['type'] === 'string' ? node.attrs['type'] : 'file';
+      const filename =
+        typeof node.attrs?.['alt'] === 'string'
+          ? node.attrs['alt']
+          : typeof node.attrs?.['__fileName'] === 'string'
+            ? node.attrs['__fileName']
+            : '';
+
+      if (
+        id !== undefined &&
+        mediaType === 'file' &&
+        (filename === '' || isImageFilename(filename))
+      ) {
+        parts.push(`[image: id=${id}${filename !== '' ? `, filename=${filename}` : ''}]`);
+      } else {
+        parts.push('[media]');
+      }
+    }
+  }
+  return parts.length > 0 ? `${parts.join('\n')}\n\n` : '[media]\n\n';
 }
 
 function convertInlineContent(nodes: AdfNode[]): string {
