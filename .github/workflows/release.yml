@@ -102,7 +102,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Check if version is already published
@@ -122,5 +122,5 @@ jobs:
       - run: bun run build
         if: steps.check_npm.outputs.exists == 'false'
 
-      - run: npm publish --provenance --access public
+      - run: npm publish --access public
         if: steps.check_npm.outputs.exists == 'false'
