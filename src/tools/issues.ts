@@ -154,7 +154,9 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
         params.set('startAt', String(startAt));
       }
 
-      const result = await client.get<JiraSearchResult>(`/rest/api/3/search?${params.toString()}`);
+      const result = await client.get<JiraSearchResult>(
+        `/rest/api/3/search/jql?${params.toString()}`,
+      );
       return { content: [{ type: 'text' as const, text: formatSearchResult(result) }] };
     },
   );
