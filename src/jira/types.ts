@@ -128,10 +128,9 @@ export interface JiraIssue {
 }
 
 export interface JiraSearchResult {
-  startAt: number;
-  maxResults: number;
-  total: number;
   issues: JiraIssue[];
+  isLast: boolean;
+  nextPageToken?: string | undefined;
 }
 
 export interface JiraComment {

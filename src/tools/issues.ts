@@ -80,7 +80,7 @@ function formatIssue(issue: JiraIssue): string {
 
 function formatSearchResult(result: JiraSearchResult): string {
   const lines: string[] = [
-    `Found ${String(result.total)} issues (showing ${String(result.startAt + 1)}-${String(result.startAt + result.issues.length)})`,
+    `Found ${String(result.issues.length)} issues${result.isLast ? '' : ' (more available)'}`,
     '',
   ];
 
@@ -90,10 +90,10 @@ function formatSearchResult(result: JiraSearchResult): string {
     lines.push(`${issue.key}: ${f.summary} [${f.status.name}]${assignee}`);
   }
 
-  if (result.startAt + result.issues.length < result.total) {
+  if (!result.isLast && result.nextPageToken !== undefined) {
     lines.push(
       '',
-      `Use startAt=${String(result.startAt + result.issues.length)} to see more results.`,
+      `More results available. Use nextPageToken="${result.nextPageToken}" to see more.`,
     );
   }
 
@@ -135,24 +135,23 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
           .max(100)
           .optional()
           .describe('Maximum results to return (1-100, default 20)'),
-        startAt: z
-          .number()
-          .int()
-          .min(0)
+        nextPageToken: z
+          .string()
           .optional()
-          .describe('Index of the first result (for pagination, default 0)'),
+          .describe('Token for fetching the next page of results (returned from previous search)'),
       },
     },
-    async ({ jql, maxResults, startAt }) => {
+    async ({ jql, maxResults, nextPageToken }) => {
       const params = new URLSearchParams({ jql });
       if (maxResults !== undefined) {
         params.set('maxResults', String(maxResults));
       } else {
         params.set('maxResults', '20');
       }
-      if (startAt !== undefined) {
-        params.set('startAt', String(startAt));
+      if (nextPageToken !== undefined) {
+        params.set('nextPageToken', nextPageToken);
       }
+      params.set('fields', 'summary,status,assignee');
 
       const result = await client.get<JiraSearchResult>(
         `/rest/api/3/search/jql?${params.toString()}`,
