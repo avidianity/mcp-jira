@@ -74,6 +74,7 @@ mcp-jira --transport http --port 5485
 | `get_board`             | Get board configuration and columns                        |
 | `get_sprint`            | Get active/future/closed sprints for a board               |
 | `get_user`              | Search users by name or email                              |
+| `get_image`             | Fetch an image attachment by ID (returns base64)           |
 
 ### Write
 
