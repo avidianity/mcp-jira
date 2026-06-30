@@ -63,18 +63,19 @@ mcp-jira --transport http --port 5485
 
 ### Read
 
-| Tool                    | Description                                                |
-| ----------------------- | ---------------------------------------------------------- |
-| `get_issue`             | Get full issue details (description converted to Markdown) |
-| `search_issues`         | Search via JQL with pagination                             |
-| `get_issue_comments`    | List comments (bodies converted to Markdown)               |
-| `get_issue_transitions` | Get available status transitions                           |
-| `list_projects`         | List accessible projects                                   |
-| `get_project`           | Get project details, issue types, components, versions     |
-| `get_board`             | Get board configuration and columns                        |
-| `get_sprint`            | Get active/future/closed sprints for a board               |
-| `get_user`              | Search users by name or email                              |
-| `get_image`             | Fetch an image attachment by ID (returns base64)           |
+| Tool                    | Description                                                   |
+| ----------------------- | ------------------------------------------------------------- |
+| `get_issue`             | Get full issue details (description converted to Markdown)    |
+| `search_issues`         | Search via JQL with pagination                                |
+| `get_issue_comments`    | List comments (bodies converted to Markdown)                  |
+| `get_issue_transitions` | Get available status transitions                              |
+| `list_projects`         | List accessible projects                                      |
+| `get_project`           | Get project details, issue types, components, versions        |
+| `get_board`             | Get board configuration and columns                           |
+| `get_sprint`            | Get active/future/closed sprints for a board                  |
+| `get_user`              | Search users by name or email                                 |
+| `list_attachments`      | List all attachments on an issue (shows image/media file IDs) |
+| `get_image`             | Fetch an image by attachment ID or ADF media UUID             |
 
 ### Write
 
