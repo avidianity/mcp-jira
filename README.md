@@ -12,7 +12,11 @@ npm install -g @avidian/mcp-jira
 
 ### Compiled binary (no runtime needed)
 
-Download from [GitHub Releases](https://github.com/avidianity/mcp-jira/releases).
+```bash
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/avidianity/mcp-jira/main/install.sh)"
+```
+
+Or download manually from [GitHub Releases](https://github.com/avidianity/mcp-jira/releases).
 
 ## Configuration
 
