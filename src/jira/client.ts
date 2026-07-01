@@ -115,6 +115,32 @@ export class JiraClient {
 
     throw new Error('Exhausted retries without returning');
   }
+
+  async downloadUrlAsText(url: string): Promise<string> {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const response = await fetch(url, {
+        headers: { Authorization: this.authHeader },
+      });
+
+      if (response.status === 429) {
+        if (attempt === MAX_RETRIES) {
+          throw new Error(`Jira API rate limited after ${String(MAX_RETRIES)} retries`);
+        }
+        const retryAfter = response.headers.get('Retry-After');
+        const waitMs = retryAfter !== null ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to download (${String(response.status)})`);
+      }
+
+      return await response.text();
+    }
+
+    throw new Error('Exhausted retries without returning');
+  }
 }
 
 function sleep(ms: number): Promise<void> {

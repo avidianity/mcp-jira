@@ -15,6 +15,96 @@ const IMAGE_MIME_TYPES = new Set([
   'image/tiff',
 ]);
 
+const TEXT_MIME_TYPES = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'text/css',
+  'text/xml',
+  'text/yaml',
+  'text/x-yaml',
+  'text/javascript',
+  'text/x-python',
+  'text/x-java-source',
+  'text/x-c',
+  'text/x-c++src',
+  'text/x-csharp',
+  'text/x-ruby',
+  'text/x-go',
+  'text/x-rust',
+  'text/x-shellscript',
+  'text/x-sql',
+  'text/x-log',
+  'application/json',
+  'application/xml',
+  'application/x-yaml',
+  'application/javascript',
+  'application/typescript',
+  'application/x-sh',
+  'application/sql',
+  'application/graphql',
+  'application/toml',
+]);
+
+const TEXT_FILE_EXTENSIONS = new Set([
+  '.txt',
+  '.md',
+  '.markdown',
+  '.csv',
+  '.json',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.ts',
+  '.jsx',
+  '.tsx',
+  '.py',
+  '.java',
+  '.c',
+  '.cpp',
+  '.h',
+  '.hpp',
+  '.cs',
+  '.rb',
+  '.go',
+  '.rs',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.sql',
+  '.graphql',
+  '.gql',
+  '.toml',
+  '.ini',
+  '.cfg',
+  '.conf',
+  '.env',
+  '.log',
+  '.diff',
+  '.patch',
+  '.swift',
+  '.kt',
+  '.kts',
+  '.scala',
+  '.php',
+  '.r',
+  '.lua',
+  '.pl',
+  '.pm',
+]);
+
+function isTextFile(mimeType: string, filename: string): boolean {
+  if (TEXT_MIME_TYPES.has(mimeType)) return true;
+  if (mimeType.startsWith('text/')) return true;
+  const ext = filename.lastIndexOf('.') !== -1 ? filename.slice(filename.lastIndexOf('.')) : '';
+  return TEXT_FILE_EXTENSIONS.has(ext.toLowerCase());
+}
+
 export function registerMediaTools(server: McpServer, client: JiraClient): void {
   server.registerTool(
     'get_image',
@@ -77,7 +167,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     'list_attachments',
     {
       description:
-        'List all attachments on a Jira issue. Useful for discovering images that may not be embedded in the description or comments. Use get_image with the attachment ID to fetch image content.',
+        'List all attachments on a Jira issue. Useful for discovering files that may not be embedded in the description or comments. Use get_image with the attachment ID to fetch image content, or get_text_file to fetch text-based file content.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
       },
@@ -95,7 +185,8 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       const lines: string[] = [`Attachments on ${issueKey} (${String(attachments.length)}):`, ''];
       for (const att of attachments) {
         const isImage = IMAGE_MIME_TYPES.has(att.mimeType);
-        const tag = isImage ? ' [image]' : '';
+        const isText = isTextFile(att.mimeType, att.filename);
+        const tag = isImage ? ' [image]' : isText ? ' [text]' : '';
         const mediaId =
           att.mediaApiFileId !== undefined ? `, mediaFileId=${att.mediaApiFileId}` : '';
         lines.push(
@@ -104,6 +195,68 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'get_text_file',
+    {
+      description:
+        'Fetch a text-based file attachment from a Jira issue and return its content as plain text. Supports common text formats including .txt, .md, .csv, .json, .xml, .yaml, .log, .sql, and source code files (.js, .ts, .py, .java, etc.). Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
+      inputSchema: {
+        issueKey: z
+          .string()
+          .regex(ISSUE_KEY_PATTERN)
+          .describe('The issue key (e.g., PROJ-123). Required to resolve media file UUIDs.'),
+        fileId: z
+          .string()
+          .describe(
+            'The attachment ID (numeric) or media file ID (UUID) from attachment references',
+          ),
+      },
+    },
+    async ({ issueKey, fileId }) => {
+      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
+      );
+
+      const att = attachments.fields.attachment.find(
+        (a) => a.id === fileId || a.mediaApiFileId === fileId,
+      );
+
+      if (att === undefined) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (!isTextFile(att.mimeType, att.filename)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for image attachments.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const text = await client.downloadUrlAsText(att.content);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `--- ${att.filename} (${att.mimeType}) ---\n${text}`,
+          },
+        ],
+      };
     },
   );
 }
