@@ -77,6 +77,54 @@ export class JiraClient {
     });
   }
 
+  async del<T>(path: string): Promise<T> {
+    return this.request<T>(path, { method: 'DELETE' });
+  }
+
+  async uploadAttachment<T>(
+    path: string,
+    filename: string,
+    data: Buffer,
+    mimeType: string,
+  ): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const form = new FormData();
+    form.append('file', new Blob([data], { type: mimeType }), filename);
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: this.authHeader,
+          Accept: 'application/json',
+          // Required by Jira for multipart uploads; also let fetch set the
+          // multipart boundary by omitting Content-Type.
+          'X-Atlassian-Token': 'no-check',
+        },
+        body: form,
+      });
+
+      if (response.status === 429) {
+        if (attempt === MAX_RETRIES) {
+          throw new Error(`Jira API rate limited after ${String(MAX_RETRIES)} retries`);
+        }
+        const retryAfter = response.headers.get('Retry-After');
+        const waitMs = retryAfter !== null ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Jira API error (${String(response.status)}): ${body}`);
+      }
+
+      return (await response.json()) as T;
+    }
+
+    throw new Error('Exhausted retries without returning');
+  }
+
   async getAttachmentContent(attachmentId: string): Promise<{ base64: string; mimeType: string }> {
     const meta = await this.get<{
       id: string;

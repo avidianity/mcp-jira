@@ -8,6 +8,9 @@ import { registerBoardTools } from '@/tools/boards';
 import { registerUserTools } from '@/tools/users';
 import { registerLinkTools } from '@/tools/links';
 import { registerMediaTools } from '@/tools/media';
+import { registerParticipationTools } from '@/tools/participation';
+import { registerWorklogTools } from '@/tools/worklogs';
+import { registerMetadataTools } from '@/tools/metadata';
 
 export function createServer(client: JiraClient): McpServer {
   const server = new McpServer({
@@ -23,6 +26,9 @@ export function createServer(client: JiraClient): McpServer {
   registerUserTools(server, client);
   registerLinkTools(server, client);
   registerMediaTools(server, client);
+  registerParticipationTools(server, client);
+  registerWorklogTools(server, client);
+  registerMetadataTools(server, client);
 
   return server;
 }

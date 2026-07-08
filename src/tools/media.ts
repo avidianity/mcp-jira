@@ -259,4 +259,76 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       };
     },
   );
+
+  server.registerTool(
+    'add_attachment',
+    {
+      description:
+        'Upload a file attachment to a Jira issue. Provide the content either as plain UTF-8 text (content) or as base64 (contentBase64) for binary files. Exactly one of content or contentBase64 must be given.',
+      inputSchema: {
+        issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
+        filename: z.string().describe('The filename to store the attachment as (e.g., notes.txt)'),
+        content: z.string().optional().describe('File content as plain UTF-8 text'),
+        contentBase64: z
+          .string()
+          .optional()
+          .describe('File content as a base64-encoded string (for binary files)'),
+        mimeType: z
+          .string()
+          .optional()
+          .describe('MIME type of the file (default: application/octet-stream)'),
+      },
+    },
+    async ({ issueKey, filename, content, contentBase64, mimeType }) => {
+      if ((content === undefined) === (contentBase64 === undefined)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'Provide exactly one of content (text) or contentBase64 (binary).',
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const data =
+        contentBase64 !== undefined
+          ? Buffer.from(contentBase64, 'base64')
+          : Buffer.from(content ?? '', 'utf-8');
+      const type = mimeType ?? (content !== undefined ? 'text/plain' : 'application/octet-stream');
+
+      const uploaded = await client.uploadAttachment<JiraAttachment[]>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}/attachments`,
+        filename,
+        data,
+        type,
+      );
+
+      const first = uploaded[0];
+      const idInfo = first !== undefined ? ` (id=${first.id})` : '';
+      return {
+        content: [
+          { type: 'text' as const, text: `Attached "${filename}" to ${issueKey}${idInfo}` },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    'delete_attachment',
+    {
+      description:
+        'Delete an attachment by its numeric attachment ID (from list_attachments). This cannot be undone.',
+      inputSchema: {
+        attachmentId: z.string().describe('The numeric attachment ID (from list_attachments)'),
+      },
+    },
+    async ({ attachmentId }) => {
+      await client.del(`/rest/api/3/attachment/${encodeURIComponent(attachmentId)}`);
+      return {
+        content: [{ type: 'text' as const, text: `Deleted attachment ${attachmentId}` }],
+      };
+    },
+  );
 }

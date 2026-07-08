@@ -15,8 +15,9 @@ function formatComments(result: JiraCommentPage): string {
   for (const comment of result.comments) {
     const author = comment.author.displayName;
     const date = comment.created;
+    const edited = comment.updated !== comment.created ? `, edited ${comment.updated}` : '';
     const body = adfToMarkdown(comment.body);
-    lines.push(`--- ${author} (${date}) ---`);
+    lines.push(`--- [id ${comment.id}] ${author} (${date}${edited}) ---`);
     lines.push(body);
     lines.push('');
   }
@@ -91,6 +92,51 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
       });
       return {
         content: [{ type: 'text' as const, text: `Added comment to ${issueKey}` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'update_comment',
+    {
+      description:
+        'Edit an existing comment on a Jira issue. The new body replaces the old one and should be written in Markdown. Use get_issue_comments to find the comment ID. Mention users with @[accountId] or @[Display Name|accountId].',
+      inputSchema: {
+        issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
+        commentId: z.string().describe('The comment ID (from get_issue_comments)'),
+        body: z
+          .string()
+          .describe('New comment body in Markdown format (replaces the existing body)'),
+      },
+    },
+    async ({ issueKey, commentId, body }) => {
+      const adfBody = markdownToAdf(body);
+      await client.put(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
+        { body: adfBody },
+      );
+      return {
+        content: [{ type: 'text' as const, text: `Updated comment ${commentId} on ${issueKey}` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'delete_comment',
+    {
+      description:
+        'Delete a comment from a Jira issue. Use get_issue_comments to find the comment ID. This cannot be undone.',
+      inputSchema: {
+        issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
+        commentId: z.string().describe('The comment ID (from get_issue_comments)'),
+      },
+    },
+    async ({ issueKey, commentId }) => {
+      await client.del(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
+      );
+      return {
+        content: [{ type: 'text' as const, text: `Deleted comment ${commentId} from ${issueKey}` }],
       };
     },
   );

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
-import type { JiraIssue, JiraSearchResult } from '@/jira/types';
+import type { JiraChangelogPage, JiraIssue, JiraSearchResult } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
@@ -266,6 +266,91 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
       return {
         content: [{ type: 'text' as const, text: `Updated issue: ${issueKey}` }],
       };
+    },
+  );
+
+  server.registerTool(
+    'delete_issue',
+    {
+      description:
+        'Delete a Jira issue. This is permanent and cannot be undone. Set deleteSubtasks to true to also delete any subtasks (otherwise deletion fails if subtasks exist).',
+      inputSchema: {
+        issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
+        deleteSubtasks: z
+          .boolean()
+          .optional()
+          .describe('Also delete subtasks (default false). Required when the issue has subtasks.'),
+      },
+    },
+    async ({ issueKey, deleteSubtasks }) => {
+      const params = new URLSearchParams({
+        deleteSubtasks: deleteSubtasks === true ? 'true' : 'false',
+      });
+      await client.del(`/rest/api/3/issue/${encodeURIComponent(issueKey)}?${params.toString()}`);
+      return {
+        content: [{ type: 'text' as const, text: `Deleted issue: ${issueKey}` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'get_issue_changelog',
+    {
+      description:
+        'Get the change history (field-by-field audit log) of a Jira issue — who changed what and when. Useful for understanding how an issue reached its current state.',
+      inputSchema: {
+        issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
+        maxResults: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe('Maximum history entries to return (1-100, default 50)'),
+        startAt: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('Index of the first result (for pagination, default 0)'),
+      },
+    },
+    async ({ issueKey, maxResults, startAt }) => {
+      const params = new URLSearchParams();
+      params.set('maxResults', String(maxResults ?? 50));
+      if (startAt !== undefined) {
+        params.set('startAt', String(startAt));
+      }
+
+      const result = await client.get<JiraChangelogPage>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}/changelog?${params.toString()}`,
+      );
+
+      if (result.values.length === 0) {
+        return { content: [{ type: 'text' as const, text: `No change history for ${issueKey}` }] };
+      }
+
+      const lines: string[] = [
+        `Change history for ${issueKey} (${String(result.startAt + 1)}-${String(result.startAt + result.values.length)} of ${String(result.total)})`,
+        '',
+      ];
+      for (const entry of result.values) {
+        lines.push(`--- ${entry.author.displayName} (${entry.created}) ---`);
+        for (const item of entry.items) {
+          const from = item.fromString ?? '(none)';
+          const to = item.toString ?? '(none)';
+          lines.push(`  ${item.field}: ${from} → ${to}`);
+        }
+        lines.push('');
+      }
+
+      if (result.startAt + result.values.length < result.total) {
+        lines.push(
+          `Use startAt=${String(result.startAt + result.values.length)} to see more history.`,
+        );
+      }
+
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
     },
   );
 }

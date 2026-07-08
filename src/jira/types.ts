@@ -161,6 +161,48 @@ export interface JiraAttachment {
   mediaApiFileId?: string | undefined;
 }
 
+export interface JiraChangelogItem {
+  field: string;
+  fieldtype: string;
+  from: string | null;
+  fromString: string | null;
+  to: string | null;
+  toString: string | null;
+}
+
+export interface JiraChangelogEntry {
+  id: string;
+  author: JiraUser;
+  created: string;
+  items: JiraChangelogItem[];
+}
+
+export interface JiraChangelogPage {
+  startAt: number;
+  maxResults: number;
+  total: number;
+  values: JiraChangelogEntry[];
+}
+
+export interface JiraWorklog {
+  id: string;
+  self: string;
+  author: JiraUser;
+  comment?: AdfDocument | undefined;
+  created: string;
+  updated: string;
+  started: string;
+  timeSpent: string;
+  timeSpentSeconds: number;
+}
+
+export interface JiraWorklogPage {
+  startAt: number;
+  maxResults: number;
+  total: number;
+  worklogs: JiraWorklog[];
+}
+
 export interface JiraTransition {
   id: string;
   name: string;
