@@ -72,10 +72,16 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
     'add_comment',
     {
       description:
-        'Add a comment to a Jira issue. The comment body should be written in Markdown and will be converted to Jira format automatically.',
+        'Add a comment to a Jira issue. The comment body should be written in Markdown and will be converted to Jira format automatically. ' +
+        "To mention/tag a user, use @[accountId] or @[Display Name|accountId] — use get_user to look up a user's accountId. " +
+        'Plain @Username text is NOT converted to a mention.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
-        body: z.string().describe('Comment body in Markdown format'),
+        body: z
+          .string()
+          .describe(
+            'Comment body in Markdown format. Mention users with @[accountId] or @[Display Name|accountId].',
+          ),
       },
     },
     async ({ issueKey, body }) => {

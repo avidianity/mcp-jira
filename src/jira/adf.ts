@@ -85,8 +85,13 @@ function convertNode(node: AdfNode, context?: ListContext): string {
       return applyMarks(node.text ?? '', node.marks ?? []);
 
     case 'mention': {
-      const mentionText = typeof node.attrs?.['text'] === 'string' ? node.attrs['text'] : 'unknown';
-      return `@${mentionText}`;
+      const id = typeof node.attrs?.['id'] === 'string' ? node.attrs['id'] : '';
+      const rawText = typeof node.attrs?.['text'] === 'string' ? node.attrs['text'] : '';
+      const displayName = rawText.replace(/^@/, '');
+      if (id === '') {
+        return displayName === '' ? '@unknown' : `@${displayName}`;
+      }
+      return displayName === '' ? `@[${id}]` : `@[${displayName}|${id}]`;
     }
 
     case 'emoji': {
@@ -377,7 +382,8 @@ export function markdownToAdf(markdown: string): AdfDocument {
 
 function parseInlineContent(text: string): AdfNode[] {
   const nodes: AdfNode[] = [];
-  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|\[(.+?)]\((.+?)\)|~~(.+?)~~)/g;
+  const regex =
+    /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|\[(.+?)]\((.+?)\)|~~(.+?)~~|@\[([^\]|]+?)(?:\|([^\]]+?))?\])/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null = regex.exec(text);
 
@@ -392,6 +398,8 @@ function parseInlineContent(text: string): AdfNode[] {
     const linkText = match[5];
     const linkHref = match[6];
     const strikethrough = match[7];
+    const mentionFirst = match[8];
+    const mentionAccountId = match[9];
 
     if (bold !== undefined) {
       nodes.push({ type: 'text', text: bold, marks: [{ type: 'strong' }] });
@@ -407,6 +415,13 @@ function parseInlineContent(text: string): AdfNode[] {
       });
     } else if (strikethrough !== undefined) {
       nodes.push({ type: 'text', text: strikethrough, marks: [{ type: 'strike' }] });
+    } else if (mentionFirst !== undefined) {
+      // Mention syntax: @[accountId] or @[Display Name|accountId]
+      const accountId = mentionAccountId ?? mentionFirst;
+      nodes.push({
+        type: 'mention',
+        attrs: { id: accountId, text: `@${mentionFirst}` },
+      });
     }
 
     lastIndex = match.index + match[0].length;
