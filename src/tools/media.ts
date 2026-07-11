@@ -15,6 +15,36 @@ const IMAGE_MIME_TYPES = new Set([
   'image/tiff',
 ]);
 
+const VIDEO_MIME_TYPES = new Set([
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'video/x-msvideo',
+  'video/x-matroska',
+  'video/mpeg',
+  'video/ogg',
+  'video/3gpp',
+  'video/3gpp2',
+  'video/x-flv',
+  'video/x-ms-wmv',
+]);
+
+const VIDEO_FILE_EXTENSIONS = new Set([
+  '.mp4',
+  '.webm',
+  '.mov',
+  '.avi',
+  '.mkv',
+  '.mpeg',
+  '.mpg',
+  '.ogv',
+  '.3gp',
+  '.3g2',
+  '.flv',
+  '.wmv',
+  '.m4v',
+]);
+
 const TEXT_MIME_TYPES = new Set([
   'text/plain',
   'text/markdown',
@@ -98,11 +128,65 @@ const TEXT_FILE_EXTENSIONS = new Set([
   '.pm',
 ]);
 
+function fileExtension(filename: string): string {
+  return filename.lastIndexOf('.') !== -1 ? filename.slice(filename.lastIndexOf('.')) : '';
+}
+
 function isTextFile(mimeType: string, filename: string): boolean {
   if (TEXT_MIME_TYPES.has(mimeType)) return true;
   if (mimeType.startsWith('text/')) return true;
-  const ext = filename.lastIndexOf('.') !== -1 ? filename.slice(filename.lastIndexOf('.')) : '';
-  return TEXT_FILE_EXTENSIONS.has(ext.toLowerCase());
+  return TEXT_FILE_EXTENSIONS.has(fileExtension(filename).toLowerCase());
+}
+
+function isVideoFile(mimeType: string, filename: string): boolean {
+  if (VIDEO_MIME_TYPES.has(mimeType)) return true;
+  if (mimeType.startsWith('video/')) return true;
+  return VIDEO_FILE_EXTENSIONS.has(fileExtension(filename).toLowerCase());
+}
+
+function attachmentNotFound(
+  issueKey: string,
+  fileId: string,
+): { content: [{ type: 'text'; text: string }]; isError: true } {
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
+      },
+    ],
+    isError: true,
+  };
+}
+
+function binaryResource(
+  att: JiraAttachment,
+  base64: string,
+): {
+  content: [
+    { type: 'text'; text: string },
+    {
+      type: 'resource';
+      resource: { uri: string; mimeType: string; blob: string };
+    },
+  ];
+} {
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: `--- ${att.filename} (${att.mimeType}, ${String(Math.round(att.size / 1024))}KB) ---`,
+      },
+      {
+        type: 'resource' as const,
+        resource: {
+          uri: `jira://attachment/${att.id}/${encodeURIComponent(att.filename)}`,
+          mimeType: att.mimeType,
+          blob: base64,
+        },
+      },
+    ],
+  };
 }
 
 export function registerMediaTools(server: McpServer, client: JiraClient): void {
@@ -133,15 +217,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       );
 
       if (att === undefined) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
-            },
-          ],
-          isError: true,
-        };
+        return attachmentNotFound(issueKey, fileId);
       }
 
       if (!IMAGE_MIME_TYPES.has(att.mimeType)) {
@@ -149,7 +225,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           content: [
             {
               type: 'text' as const,
-              text: `Attachment "${att.filename}" is not an image (type: ${att.mimeType})`,
+              text: `Attachment "${att.filename}" is not an image (type: ${att.mimeType}). Use get_video, get_text_file, or get_binary_file as appropriate.`,
             },
           ],
           isError: true,
@@ -167,7 +243,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     'list_attachments',
     {
       description:
-        'List all attachments on a Jira issue. Useful for discovering files that may not be embedded in the description or comments. Use get_image with the attachment ID to fetch image content, or get_text_file to fetch text-based file content.',
+        'List all attachments on a Jira issue. Useful for discovering files that may not be embedded in the description or comments. Use get_image for images, get_video for videos, get_text_file for text/source files, or get_binary_file for other binary attachments.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
       },
@@ -185,8 +261,9 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       const lines: string[] = [`Attachments on ${issueKey} (${String(attachments.length)}):`, ''];
       for (const att of attachments) {
         const isImage = IMAGE_MIME_TYPES.has(att.mimeType);
+        const isVideo = isVideoFile(att.mimeType, att.filename);
         const isText = isTextFile(att.mimeType, att.filename);
-        const tag = isImage ? ' [image]' : isText ? ' [text]' : '';
+        const tag = isImage ? ' [image]' : isVideo ? ' [video]' : isText ? ' [text]' : ' [binary]';
         const mediaId =
           att.mediaApiFileId !== undefined ? `, mediaFileId=${att.mediaApiFileId}` : '';
         lines.push(
@@ -225,15 +302,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       );
 
       if (att === undefined) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
-            },
-          ],
-          isError: true,
-        };
+        return attachmentNotFound(issueKey, fileId);
       }
 
       if (!isTextFile(att.mimeType, att.filename)) {
@@ -241,7 +310,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           content: [
             {
               type: 'text' as const,
-              text: `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for image attachments.`,
+              text: `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for images, get_video for videos, or get_binary_file for other binaries.`,
             },
           ],
           isError: true,
@@ -257,6 +326,124 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           },
         ],
       };
+    },
+  );
+
+  server.registerTool(
+    'get_video',
+    {
+      description:
+        'Fetch a video attachment from a Jira issue and return it as a base64 embedded resource. Supports common video formats including .mp4, .webm, .mov, .avi, .mkv, .mpeg, .ogv, and .3gp. Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
+      inputSchema: {
+        issueKey: z
+          .string()
+          .regex(ISSUE_KEY_PATTERN)
+          .describe('The issue key (e.g., PROJ-123). Required to resolve media file UUIDs.'),
+        fileId: z
+          .string()
+          .describe(
+            'The attachment ID (numeric) or media file ID (UUID) from attachment references',
+          ),
+      },
+    },
+    async ({ issueKey, fileId }) => {
+      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
+      );
+
+      const att = attachments.fields.attachment.find(
+        (a) => a.id === fileId || a.mediaApiFileId === fileId,
+      );
+
+      if (att === undefined) {
+        return attachmentNotFound(issueKey, fileId);
+      }
+
+      if (!isVideoFile(att.mimeType, att.filename)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Attachment "${att.filename}" is not a video (type: ${att.mimeType}). Use get_image for images, get_text_file for text, or get_binary_file for other binaries.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+      return binaryResource(att, base64);
+    },
+  );
+
+  server.registerTool(
+    'get_binary_file',
+    {
+      description:
+        'Fetch a binary file attachment from a Jira issue and return it as a base64 embedded resource. Use for PDFs, archives, office docs, and other non-text binaries. Prefer get_image for images, get_video for videos, and get_text_file for text/source files. Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
+      inputSchema: {
+        issueKey: z
+          .string()
+          .regex(ISSUE_KEY_PATTERN)
+          .describe('The issue key (e.g., PROJ-123). Required to resolve media file UUIDs.'),
+        fileId: z
+          .string()
+          .describe(
+            'The attachment ID (numeric) or media file ID (UUID) from attachment references',
+          ),
+      },
+    },
+    async ({ issueKey, fileId }) => {
+      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
+      );
+
+      const att = attachments.fields.attachment.find(
+        (a) => a.id === fileId || a.mediaApiFileId === fileId,
+      );
+
+      if (att === undefined) {
+        return attachmentNotFound(issueKey, fileId);
+      }
+
+      if (isTextFile(att.mimeType, att.filename)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Attachment "${att.filename}" is a text file (type: ${att.mimeType}). Use get_text_file instead.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (IMAGE_MIME_TYPES.has(att.mimeType)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Attachment "${att.filename}" is an image (type: ${att.mimeType}). Use get_image instead.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (isVideoFile(att.mimeType, att.filename)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Attachment "${att.filename}" is a video (type: ${att.mimeType}). Use get_video instead.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+      return binaryResource(att, base64);
     },
   );
 
