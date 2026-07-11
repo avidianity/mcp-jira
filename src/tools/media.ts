@@ -1,9 +1,19 @@
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraAttachment } from '@/jira/types';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
+
+const outputModeSchema = z
+  .enum(['base64', 'path'])
+  .default('base64')
+  .describe(
+    'How to return the file: "base64" embeds content in the MCP response; "path" writes to a temp file and returns the local path (for passing to other tools)',
+  );
 
 const IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -159,6 +169,15 @@ function attachmentNotFound(
   };
 }
 
+function sanitizeFilename(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() ?? filename;
+  return base.replace(/[^\w.\-()+ ]+/g, '_').replace(/^\.+/, '_') || 'attachment';
+}
+
+function attachmentMetaText(att: JiraAttachment): string {
+  return `${att.filename} (${att.mimeType}, ${String(Math.round(att.size / 1024))}KB)`;
+}
+
 function binaryResource(
   att: JiraAttachment,
   base64: string,
@@ -175,7 +194,7 @@ function binaryResource(
     content: [
       {
         type: 'text' as const,
-        text: `--- ${att.filename} (${att.mimeType}, ${String(Math.round(att.size / 1024))}KB) ---`,
+        text: `--- ${attachmentMetaText(att)} ---`,
       },
       {
         type: 'resource' as const,
@@ -189,12 +208,40 @@ function binaryResource(
   };
 }
 
+export async function writeAttachmentToTemp(att: JiraAttachment, base64: string): Promise<string> {
+  const safeName = sanitizeFilename(att.filename);
+  const filePath = join(tmpdir(), `jira-attachment-${att.id}-${safeName}`);
+  await writeFile(filePath, Buffer.from(base64, 'base64'));
+  return filePath;
+}
+
+function pathResult(
+  att: JiraAttachment,
+  filePath: string,
+): {
+  content: [{ type: 'text'; text: string }];
+} {
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: [
+          `Saved: ${filePath}`,
+          `filename: ${att.filename}`,
+          `mimeType: ${att.mimeType}`,
+          `size: ${String(Math.round(att.size / 1024))}KB`,
+        ].join('\n'),
+      },
+    ],
+  };
+}
+
 export function registerMediaTools(server: McpServer, client: JiraClient): void {
   server.registerTool(
     'get_image',
     {
       description:
-        'Fetch an image attachment from a Jira issue. Accepts either an attachment ID (numeric) or a media file ID (UUID from [image: id=<uuid>] references in descriptions/comments). When using a UUID, the issueKey is required to resolve it.',
+        'Fetch an image attachment from a Jira issue. Accepts either an attachment ID (numeric) or a media file ID (UUID from [image: id=<uuid>] references in descriptions/comments). When using a UUID, the issueKey is required to resolve it. Use output="path" to write a temp file and return its local path for other tools; output="base64" (default) returns MCP image content.',
       inputSchema: {
         issueKey: z
           .string()
@@ -205,9 +252,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           .describe(
             'The attachment ID (numeric) or media file ID (UUID) from [image: id=<id>] references',
           ),
+        output: outputModeSchema,
       },
     },
-    async ({ issueKey, fileId }) => {
+    async ({ issueKey, fileId, output }) => {
       const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
       );
@@ -233,6 +281,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       const { base64, mimeType } = await client.downloadUrl(att.content, att.mimeType);
+      if (output === 'path') {
+        const filePath = await writeAttachmentToTemp(att, base64);
+        return pathResult(att, filePath);
+      }
       return {
         content: [{ type: 'image' as const, data: base64, mimeType }],
       };
@@ -333,7 +385,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     'get_video',
     {
       description:
-        'Fetch a video attachment from a Jira issue and return it as a base64 embedded resource. Supports common video formats including .mp4, .webm, .mov, .avi, .mkv, .mpeg, .ogv, and .3gp. Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
+        'Fetch a video attachment from a Jira issue. Supports common video formats including .mp4, .webm, .mov, .avi, .mkv, .mpeg, .ogv, and .3gp. Use output="path" (recommended for other MCP tools like summarize_video) to write a temp file and return its local path; output="base64" embeds the video as a resource. Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
       inputSchema: {
         issueKey: z
           .string()
@@ -344,9 +396,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           .describe(
             'The attachment ID (numeric) or media file ID (UUID) from attachment references',
           ),
+        output: outputModeSchema,
       },
     },
-    async ({ issueKey, fileId }) => {
+    async ({ issueKey, fileId, output }) => {
       const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
       );
@@ -372,6 +425,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+      if (output === 'path') {
+        const filePath = await writeAttachmentToTemp(att, base64);
+        return pathResult(att, filePath);
+      }
       return binaryResource(att, base64);
     },
   );
@@ -380,7 +437,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     'get_binary_file',
     {
       description:
-        'Fetch a binary file attachment from a Jira issue and return it as a base64 embedded resource. Use for PDFs, archives, office docs, and other non-text binaries. Prefer get_image for images, get_video for videos, and get_text_file for text/source files. Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
+        'Fetch a binary file attachment from a Jira issue. Use for PDFs, archives, office docs, and other non-text binaries. Prefer get_image for images, get_video for videos, and get_text_file for text/source files. Use output="path" to write a temp file and return its local path for other tools; output="base64" (default) embeds the file as a resource. Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
       inputSchema: {
         issueKey: z
           .string()
@@ -391,9 +448,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           .describe(
             'The attachment ID (numeric) or media file ID (UUID) from attachment references',
           ),
+        output: outputModeSchema,
       },
     },
-    async ({ issueKey, fileId }) => {
+    async ({ issueKey, fileId, output }) => {
       const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
       );
@@ -443,6 +501,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+      if (output === 'path') {
+        const filePath = await writeAttachmentToTemp(att, base64);
+        return pathResult(att, filePath);
+      }
       return binaryResource(att, base64);
     },
   );

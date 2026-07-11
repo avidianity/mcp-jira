@@ -112,10 +112,10 @@ mcp-jira --transport http --port 5485
 | `delete_issue_link` | Delete a link by ID                                           |
 | `add_remote_link`   | Attach an external URL to an issue                            |
 | `list_attachments`  | List all attachments on an issue (shows image/media file IDs) |
-| `get_image`         | Fetch an image by attachment ID or ADF media UUID             |
-| `get_video`         | Fetch a video attachment as a base64 resource                 |
+| `get_image`         | Fetch an image (`output`: `base64` or `path`)                 |
+| `get_video`         | Fetch a video (`output`: `base64` or `path`)                  |
 | `get_text_file`     | Fetch a text/source-file attachment as text                   |
-| `get_binary_file`   | Fetch a non-text binary attachment as a base64 resource       |
+| `get_binary_file`   | Fetch a binary file (`output`: `base64` or `path`)            |
 | `add_attachment`    | Upload a file (text or base64 binary)                         |
 | `delete_attachment` | Delete an attachment by ID                                    |
 
