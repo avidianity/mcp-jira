@@ -1,34 +1,121 @@
+import Fuse from 'fuse.js';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
-import type { JiraCommentPage } from '@/jira/types';
+import type { JiraComment, JiraCommentPage } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
-function formatComments(result: JiraCommentPage): string {
+const commentSortSchema = z
+  .enum(['created_asc', 'created_desc'])
+  .default('created_desc')
+  .describe(
+    'Sort order by creation time: created_asc (oldest first) or created_desc (newest first)',
+  );
+
+export type CommentSort = z.infer<typeof commentSortSchema>;
+
+export interface SearchableComment {
+  id: string;
+  author: string;
+  body: string;
+  created: string;
+  updated: string;
+}
+
+/** Max comments loaded client-side when fuzzy-searching across an issue. */
+const SEARCH_FETCH_CAP = 500;
+
+export function sortToOrderBy(sort: CommentSort): string {
+  return sort === 'created_desc' ? '-created' : 'created';
+}
+
+export function toSearchableComment(comment: JiraComment): SearchableComment {
+  return {
+    id: comment.id,
+    author: comment.author.displayName,
+    body: adfToMarkdown(comment.body),
+    created: comment.created,
+    updated: comment.updated,
+  };
+}
+
+export function searchComments(comments: SearchableComment[], query: string): SearchableComment[] {
+  const fuse = new Fuse(comments, {
+    keys: [
+      { name: 'body', weight: 0.7 },
+      { name: 'author', weight: 0.3 },
+    ],
+    threshold: 0.45,
+    ignoreLocation: true,
+    includeScore: true,
+    minMatchCharLength: 2,
+  });
+  return fuse.search(query.trim()).map((result) => result.item);
+}
+
+function formatSearchableComments(
+  comments: SearchableComment[],
+  total: number,
+  startAt: number,
+): string {
+  const end = startAt + comments.length;
   const lines: string[] = [
-    `Comments (${String(result.startAt + 1)}-${String(result.startAt + result.comments.length)} of ${String(result.total)})`,
+    `Comments (${String(startAt + 1)}-${String(end)} of ${String(total)})`,
     '',
   ];
 
-  for (const comment of result.comments) {
-    const author = comment.author.displayName;
-    const date = comment.created;
+  for (const comment of comments) {
     const edited = comment.updated !== comment.created ? `, edited ${comment.updated}` : '';
-    const body = adfToMarkdown(comment.body);
-    lines.push(`--- [id ${comment.id}] ${author} (${date}${edited}) ---`);
-    lines.push(body);
+    lines.push(`--- [id ${comment.id}] ${comment.author} (${comment.created}${edited}) ---`);
+    lines.push(comment.body);
     lines.push('');
   }
 
-  if (result.startAt + result.comments.length < result.total) {
-    lines.push(
-      `Use startAt=${String(result.startAt + result.comments.length)} to see more comments.`,
-    );
+  if (end < total) {
+    lines.push(`Use startAt=${String(end)} to see more comments.`);
   }
 
   return lines.join('\n');
+}
+
+function formatComments(result: JiraCommentPage): string {
+  return formatSearchableComments(
+    result.comments.map(toSearchableComment),
+    result.total,
+    result.startAt,
+  );
+}
+
+async function fetchAllComments(
+  client: JiraClient,
+  issueKey: string,
+  orderBy: string,
+  cap: number,
+): Promise<JiraComment[]> {
+  const pageSize = 100;
+  const all: JiraComment[] = [];
+  let startAt = 0;
+
+  while (all.length < cap) {
+    const params = new URLSearchParams();
+    params.set('maxResults', String(Math.min(pageSize, cap - all.length)));
+    params.set('startAt', String(startAt));
+    params.set('orderBy', orderBy);
+
+    const page = await client.get<JiraCommentPage>(
+      `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment?${params.toString()}`,
+    );
+    all.push(...page.comments);
+
+    if (page.comments.length === 0 || startAt + page.comments.length >= page.total) {
+      break;
+    }
+    startAt += page.comments.length;
+  }
+
+  return all;
 }
 
 export function registerCommentTools(server: McpServer, client: JiraClient): void {
@@ -36,7 +123,8 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
     'get_issue_comments',
     {
       description:
-        'Get comments on a Jira issue, ordered by creation date. Comment bodies are converted from Jira format to Markdown.',
+        'Get comments on a Jira issue. Bodies are converted from Jira format to Markdown. ' +
+        'Use sort to order by creation time, and search for fuzzy matching over author and body to avoid flooding context with unrelated comments.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
         maxResults: z
@@ -45,22 +133,49 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
           .min(1)
           .max(100)
           .optional()
-          .describe('Maximum comments to return (1-100, default 20)'),
+          .describe('Maximum comments to return (1-100, default 5)'),
         startAt: z
           .number()
           .int()
           .min(0)
           .optional()
           .describe('Index of the first result (for pagination, default 0)'),
+        sort: commentSortSchema,
+        search: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Fuzzy search query over comment body and author. When set, comments are loaded (up to 500) and ranked by relevance; sort still controls fetch order before ranking.',
+          ),
       },
     },
-    async ({ issueKey, maxResults, startAt }) => {
-      const params = new URLSearchParams();
-      params.set('maxResults', String(maxResults ?? 20));
-      if (startAt !== undefined) {
-        params.set('startAt', String(startAt));
+    async ({ issueKey, maxResults, startAt, sort, search }) => {
+      const limit = maxResults ?? 5;
+      const offset = startAt ?? 0;
+      const orderBy = sortToOrderBy(sort);
+
+      if (search !== undefined) {
+        const raw = await fetchAllComments(client, issueKey, orderBy, SEARCH_FETCH_CAP);
+        const searchable = raw.map(toSearchableComment);
+        const matched = searchComments(searchable, search);
+        const page = matched.slice(offset, offset + limit);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: formatSearchableComments(page, matched.length, offset),
+            },
+          ],
+        };
       }
-      params.set('orderBy', 'created');
+
+      const params = new URLSearchParams();
+      params.set('maxResults', String(limit));
+      if (offset > 0) {
+        params.set('startAt', String(offset));
+      }
+      params.set('orderBy', orderBy);
 
       const result = await client.get<JiraCommentPage>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment?${params.toString()}`,

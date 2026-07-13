@@ -76,12 +76,12 @@ mcp-jira --transport http --port 5485
 
 ### Comments
 
-| Tool                 | Description                                           |
-| -------------------- | ----------------------------------------------------- |
-| `get_issue_comments` | List comments with IDs (bodies converted to Markdown) |
-| `add_comment`        | Add a comment (Markdown, supports `@[id]` mentions)   |
-| `update_comment`     | Edit an existing comment                              |
-| `delete_comment`     | Delete a comment                                      |
+| Tool                 | Description                                                |
+| -------------------- | ---------------------------------------------------------- |
+| `get_issue_comments` | List comments with IDs; optional `sort` and fuzzy `search` |
+| `add_comment`        | Add a comment (Markdown, supports `@[id]` mentions)        |
+| `update_comment`     | Edit an existing comment                                   |
+| `delete_comment`     | Delete a comment                                           |
 
 ### Worklogs
 
