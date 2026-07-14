@@ -6,6 +6,140 @@ import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
+/** Field keys set by dedicated create/update params; not overridable via `fields`. */
+const RESERVED_ISSUE_FIELD_KEYS = new Set([
+  'project',
+  'issuetype',
+  'summary',
+  'description',
+  'assignee',
+  'priority',
+  'labels',
+  'parent',
+  'components',
+  'fixVersions',
+]);
+
+export function namesToNamedObjects(names: string[]): { name: string }[] {
+  return names.map((name) => ({ name }));
+}
+
+export function applyAdditionalFields(
+  target: Record<string, unknown>,
+  additional: Record<string, unknown> | undefined,
+): void {
+  if (additional === undefined) {
+    return;
+  }
+  for (const [key, value] of Object.entries(additional)) {
+    if (RESERVED_ISSUE_FIELD_KEYS.has(key)) {
+      continue;
+    }
+    target[key] = value;
+  }
+}
+
+export interface BuildCreateIssueFieldsInput {
+  projectKey: string;
+  issueType: string;
+  summary: string;
+  descriptionAdf?: unknown;
+  assigneeId?: string | undefined;
+  priority?: string | undefined;
+  labels?: string[] | undefined;
+  parentKey?: string | undefined;
+  components?: string[] | undefined;
+  fixVersions?: string[] | undefined;
+  fields?: Record<string, unknown> | undefined;
+}
+
+export function buildCreateIssueFields(
+  input: BuildCreateIssueFieldsInput,
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    project: { key: input.projectKey },
+    issuetype: { name: input.issueType },
+    summary: input.summary,
+  };
+
+  if (input.descriptionAdf !== undefined) {
+    fields['description'] = input.descriptionAdf;
+  }
+  if (input.assigneeId !== undefined) {
+    fields['assignee'] = { accountId: input.assigneeId };
+  }
+  if (input.priority !== undefined) {
+    fields['priority'] = { name: input.priority };
+  }
+  if (input.labels !== undefined) {
+    fields['labels'] = input.labels;
+  }
+  if (input.parentKey !== undefined) {
+    fields['parent'] = { key: input.parentKey };
+  }
+  if (input.components !== undefined) {
+    fields['components'] = namesToNamedObjects(input.components);
+  }
+  if (input.fixVersions !== undefined) {
+    fields['fixVersions'] = namesToNamedObjects(input.fixVersions);
+  }
+
+  applyAdditionalFields(fields, input.fields);
+  return fields;
+}
+
+export interface BuildUpdateIssueFieldsInput {
+  summary?: string | undefined;
+  descriptionAdf?: unknown;
+  assigneeId?: string | null | undefined;
+  priority?: string | undefined;
+  labels?: string[] | undefined;
+  components?: string[] | undefined;
+  fixVersions?: string[] | undefined;
+  fields?: Record<string, unknown> | undefined;
+}
+
+export function buildUpdateIssueFields(
+  input: BuildUpdateIssueFieldsInput,
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+
+  if (input.summary !== undefined) {
+    fields['summary'] = input.summary;
+  }
+  if (input.descriptionAdf !== undefined) {
+    fields['description'] = input.descriptionAdf;
+  }
+  if (input.assigneeId !== undefined) {
+    fields['assignee'] = input.assigneeId === null ? null : { accountId: input.assigneeId };
+  }
+  if (input.priority !== undefined) {
+    fields['priority'] = { name: input.priority };
+  }
+  if (input.labels !== undefined) {
+    fields['labels'] = input.labels;
+  }
+  if (input.components !== undefined) {
+    fields['components'] = namesToNamedObjects(input.components);
+  }
+  if (input.fixVersions !== undefined) {
+    fields['fixVersions'] = namesToNamedObjects(input.fixVersions);
+  }
+
+  applyAdditionalFields(fields, input.fields);
+  return fields;
+}
+
+const additionalFieldsSchema = z
+  .record(z.unknown())
+  .optional()
+  .describe(
+    'Extra Jira fields by field ID (e.g. customfield_10099). Values must match the Jira REST API shape for that field type. ' +
+      'Use list_fields to find IDs and get_create_meta for required fields and allowed values. ' +
+      'Examples: string/URL → "https://…"; single select → {"value":"Option"}; multi-select → [{"value":"A"},{"value":"B"}]. ' +
+      'Cannot override dedicated params (project, summary, components, etc.).',
+  );
+
 function formatIssue(issue: JiraIssue): string {
   const f = issue.fields;
   const baseUrl = issue.self.split('/rest/')[0] ?? '';
@@ -164,7 +298,9 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
     'create_issue',
     {
       description:
-        'Create a new Jira issue. Description should be provided as Markdown and will be converted to Jira format automatically.',
+        'Create a new Jira issue. Description should be Markdown (converted to Jira format). ' +
+        'For projects with mandatory custom fields, call get_create_meta first, then pass those via fields ' +
+        '(and components/fixVersions by name when needed).',
       inputSchema: {
         projectKey: z.string().describe('Project key (e.g., PROJ)'),
         issueType: z.string().describe('Issue type name (e.g., Bug, Task, Story, Epic)'),
@@ -181,6 +317,15 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
           .regex(ISSUE_KEY_PATTERN)
           .optional()
           .describe('Parent issue key for subtasks (e.g., PROJ-100)'),
+        components: z
+          .array(z.string())
+          .optional()
+          .describe('Component names (use list_components). Sent as [{"name":"..."}].'),
+        fixVersions: z
+          .array(z.string())
+          .optional()
+          .describe('Fix version names (use list_versions). Sent as [{"name":"..."}].'),
+        fields: additionalFieldsSchema,
       },
     },
     async ({
@@ -192,28 +337,23 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
       priority,
       labels,
       parentKey,
+      components,
+      fixVersions,
+      fields: additional,
     }) => {
-      const fields: Record<string, unknown> = {
-        project: { key: projectKey },
-        issuetype: { name: issueType },
+      const fields = buildCreateIssueFields({
+        projectKey,
+        issueType,
         summary,
-      };
-
-      if (description !== undefined) {
-        fields['description'] = markdownToAdf(description);
-      }
-      if (assigneeId !== undefined) {
-        fields['assignee'] = { accountId: assigneeId };
-      }
-      if (priority !== undefined) {
-        fields['priority'] = { name: priority };
-      }
-      if (labels !== undefined) {
-        fields['labels'] = labels;
-      }
-      if (parentKey !== undefined) {
-        fields['parent'] = { key: parentKey };
-      }
+        descriptionAdf: description !== undefined ? markdownToAdf(description) : undefined,
+        assigneeId,
+        priority,
+        labels,
+        parentKey,
+        components,
+        fixVersions,
+        fields: additional,
+      });
 
       const result = await client.post<{ id: string; key: string; self: string }>(
         '/rest/api/3/issue',
@@ -229,7 +369,8 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
     'update_issue',
     {
       description:
-        'Update fields on an existing Jira issue. Only provide fields you want to change. Description should be Markdown.',
+        'Update fields on an existing Jira issue. Only provide fields you want to change. Description should be Markdown. ' +
+        'Supports components, fixVersions, and arbitrary fields (custom fields) the same way as create_issue.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
         summary: z.string().optional().describe('New summary/title'),
@@ -241,26 +382,38 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
           .describe('Account ID of the assignee, or null to unassign'),
         priority: z.string().optional().describe('Priority name (e.g., High, Medium, Low)'),
         labels: z.array(z.string()).optional().describe('Replace all labels with this array'),
+        components: z
+          .array(z.string())
+          .optional()
+          .describe('Replace components with these names (use list_components).'),
+        fixVersions: z
+          .array(z.string())
+          .optional()
+          .describe('Replace fix versions with these names (use list_versions).'),
+        fields: additionalFieldsSchema,
       },
     },
-    async ({ issueKey, summary, description, assigneeId, priority, labels }) => {
-      const fields: Record<string, unknown> = {};
-
-      if (summary !== undefined) {
-        fields['summary'] = summary;
-      }
-      if (description !== undefined) {
-        fields['description'] = markdownToAdf(description);
-      }
-      if (assigneeId !== undefined) {
-        fields['assignee'] = assigneeId === null ? null : { accountId: assigneeId };
-      }
-      if (priority !== undefined) {
-        fields['priority'] = { name: priority };
-      }
-      if (labels !== undefined) {
-        fields['labels'] = labels;
-      }
+    async ({
+      issueKey,
+      summary,
+      description,
+      assigneeId,
+      priority,
+      labels,
+      components,
+      fixVersions,
+      fields: additional,
+    }) => {
+      const fields = buildUpdateIssueFields({
+        summary,
+        descriptionAdf: description !== undefined ? markdownToAdf(description) : undefined,
+        assigneeId,
+        priority,
+        labels,
+        components,
+        fixVersions,
+        fields: additional,
+      });
 
       await client.put(`/rest/api/3/issue/${encodeURIComponent(issueKey)}`, { fields });
       return {

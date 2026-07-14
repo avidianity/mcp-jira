@@ -19,6 +19,80 @@ interface JiraLabelPage {
   total: number;
 }
 
+interface CreateMetaIssueType {
+  id: string;
+  name: string;
+}
+
+interface CreateMetaField {
+  required: boolean;
+  name: string;
+  key?: string | undefined;
+  fieldId?: string | undefined;
+  schema?: { type: string; items?: string; custom?: string; system?: string } | undefined;
+  allowedValues?: { id?: string; name?: string; value?: string }[] | undefined;
+  hasDefaultValue?: boolean | undefined;
+}
+
+interface CreateMetaFieldsPage {
+  startAt: number;
+  maxResults: number;
+  total: number;
+  fields: CreateMetaField[];
+}
+
+function formatCreateMetaField(field: CreateMetaField): string {
+  const id = field.fieldId ?? field.key ?? field.name;
+  const type = field.schema?.type ?? 'unknown';
+  const items = field.schema?.items !== undefined ? `<${field.schema.items}>` : '';
+  const req = field.required ? 'required' : 'optional';
+  const parts = [`- ${field.name} (id=${id}, ${req}, type=${type}${items})`];
+
+  if (field.allowedValues !== undefined && field.allowedValues.length > 0) {
+    const sample = field.allowedValues.slice(0, 12).map((v) => {
+      if (v.name !== undefined) return v.name;
+      if (v.value !== undefined) return v.value;
+      if (v.id !== undefined) return `id:${v.id}`;
+      return '?';
+    });
+    const more =
+      field.allowedValues.length > sample.length
+        ? ` …+${String(field.allowedValues.length - sample.length)}`
+        : '';
+    parts.push(`    allowed: ${sample.join(', ')}${more}`);
+  }
+
+  return parts.join('\n');
+}
+
+async function fetchAllCreateMetaFields(
+  client: JiraClient,
+  projectKey: string,
+  issueTypeId: string,
+): Promise<CreateMetaField[]> {
+  const pageSize = 50;
+  const all: CreateMetaField[] = [];
+  let startAt = 0;
+  let total = Number.POSITIVE_INFINITY;
+
+  while (all.length < total) {
+    const params = new URLSearchParams();
+    params.set('startAt', String(startAt));
+    params.set('maxResults', String(pageSize));
+    const page = await client.get<CreateMetaFieldsPage>(
+      `/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(issueTypeId)}?${params.toString()}`,
+    );
+    total = page.total;
+    if (page.fields.length === 0) {
+      break;
+    }
+    all.push(...page.fields);
+    startAt += page.fields.length;
+  }
+
+  return all;
+}
+
 export function registerMetadataTools(server: McpServer, client: JiraClient): void {
   server.registerTool(
     'list_issue_types',
@@ -101,6 +175,74 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
         const type = f.schema?.type !== undefined ? `, type=${f.schema.type}` : '';
         lines.push(`- ${f.name} (id=${f.id}, ${kind}${type})`);
       }
+      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'get_create_meta',
+    {
+      description:
+        'Discover fields available when creating an issue in a project for a given issue type, including which are required and allowed values. ' +
+        'Call this before create_issue when a project enforces mandatory custom fields (components, customfield_*, etc.).',
+      inputSchema: {
+        projectKey: z.string().describe('Project key (e.g., PROJ)'),
+        issueType: z.string().describe('Issue type name or numeric ID (e.g., Task, Bug, or 10001)'),
+      },
+    },
+    async ({ projectKey, issueType }) => {
+      const issueTypesPage = await client.get<{
+        issueTypes?: CreateMetaIssueType[];
+        values?: CreateMetaIssueType[];
+      }>(`/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`);
+      const issueTypes = issueTypesPage.issueTypes ?? issueTypesPage.values ?? [];
+
+      const match = issueTypes.find(
+        (t) => t.id === issueType || t.name.toLowerCase() === issueType.toLowerCase(),
+      );
+      if (match === undefined) {
+        const names = issueTypes.map((t) => `${t.name} (id=${t.id})`).join(', ');
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Issue type "${issueType}" not found for project ${projectKey}. Available: ${names || '(none)'}`,
+            },
+          ],
+        };
+      }
+
+      const allFields = await fetchAllCreateMetaFields(client, projectKey, match.id);
+
+      const lines: string[] = [
+        `Create meta for ${projectKey} / ${match.name} (id=${match.id})`,
+        `Fields: ${String(allFields.length)}`,
+        '',
+        'Required fields (must be set on create_issue):',
+      ];
+
+      const required = allFields.filter((f) => f.required);
+      const optional = allFields.filter((f) => !f.required);
+
+      if (required.length === 0) {
+        lines.push('  (none beyond project/issuetype defaults)');
+      } else {
+        for (const f of required) {
+          lines.push(formatCreateMetaField(f));
+        }
+      }
+
+      lines.push('', 'Optional fields:');
+      for (const f of optional) {
+        lines.push(formatCreateMetaField(f));
+      }
+
+      lines.push(
+        '',
+        'Tip: pass system fields via dedicated params when available (components, fixVersions, labels, …).',
+        'Pass custom fields via create_issue.fields using the field id, e.g. fields: {"customfield_10099":"https://…"}',
+      );
+
       return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
     },
   );

@@ -1,6 +1,6 @@
 {
   "name": "@avidian/mcp-jira",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "MCP server for Jira Cloud — gives AI agents full context and control over Jira issues, projects, sprints, and workflows.",
   "type": "module",
   "main": "dist/index.js",

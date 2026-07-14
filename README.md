@@ -63,16 +63,16 @@ mcp-jira --transport http --port 5485
 
 ### Issues
 
-| Tool                    | Description                                                |
-| ----------------------- | ---------------------------------------------------------- |
-| `get_issue`             | Get full issue details (description converted to Markdown) |
-| `search_issues`         | Search via JQL with pagination                             |
-| `create_issue`          | Create a new issue (accepts Markdown description)          |
-| `update_issue`          | Update issue fields                                        |
-| `delete_issue`          | Delete an issue (optionally its subtasks)                  |
-| `get_issue_transitions` | Get available status transitions                           |
-| `transition_issue`      | Change issue status                                        |
-| `get_issue_changelog`   | Get the field-by-field change history                      |
+| Tool                    | Description                                                     |
+| ----------------------- | --------------------------------------------------------------- |
+| `get_issue`             | Get full issue details (description converted to Markdown)      |
+| `search_issues`         | Search via JQL with pagination                                  |
+| `create_issue`          | Create issue; supports components, fixVersions, custom `fields` |
+| `update_issue`          | Update issue fields (same field support as create)              |
+| `delete_issue`          | Delete an issue (optionally its subtasks)                       |
+| `get_issue_transitions` | Get available status transitions                                |
+| `transition_issue`      | Change issue status                                             |
+| `get_issue_changelog`   | Get the field-by-field change history                           |
 
 ### Comments
 
@@ -157,6 +157,7 @@ mcp-jira --transport http --port 5485
 | `list_statuses`         | List workflow statuses                   |
 | `list_priorities`       | List priorities                          |
 | `list_fields`           | List fields incl. custom field IDs       |
+| `get_create_meta`       | Required/available fields for create     |
 | `list_labels`           | List labels                              |
 
 ### Mentions
