@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraAttachment } from '@/jira/types';
+import { textResult, toonResult, type ToolTextResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -154,19 +155,11 @@ function isVideoFile(mimeType: string, filename: string): boolean {
   return VIDEO_FILE_EXTENSIONS.has(fileExtension(filename).toLowerCase());
 }
 
-function attachmentNotFound(
-  issueKey: string,
-  fileId: string,
-): { content: [{ type: 'text'; text: string }]; isError: true } {
-  return {
-    content: [
-      {
-        type: 'text' as const,
-        text: `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
-      },
-    ],
-    isError: true,
-  };
+function attachmentNotFound(issueKey: string, fileId: string): ToolTextResult {
+  return textResult(
+    `No attachment found matching ID "${fileId}" on ${issueKey}. Use list_attachments to see available attachments.`,
+    { isError: true },
+  );
 }
 
 function sanitizeFilename(filename: string): string {
@@ -215,25 +208,15 @@ export async function writeAttachmentToTemp(att: JiraAttachment, base64: string)
   return filePath;
 }
 
-function pathResult(
-  att: JiraAttachment,
-  filePath: string,
-): {
-  content: [{ type: 'text'; text: string }];
-} {
-  return {
-    content: [
-      {
-        type: 'text' as const,
-        text: [
-          `Saved: ${filePath}`,
-          `filename: ${att.filename}`,
-          `mimeType: ${att.mimeType}`,
-          `size: ${String(Math.round(att.size / 1024))}KB`,
-        ].join('\n'),
-      },
-    ],
-  };
+function pathResult(att: JiraAttachment, filePath: string): ToolTextResult {
+  return textResult(
+    [
+      `Saved: ${filePath}`,
+      `filename: ${att.filename}`,
+      `mimeType: ${att.mimeType}`,
+      `size: ${String(Math.round(att.size / 1024))}KB`,
+    ].join('\n'),
+  );
 }
 
 export function registerMediaTools(server: McpServer, client: JiraClient): void {
@@ -269,15 +252,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       if (!IMAGE_MIME_TYPES.has(att.mimeType)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Attachment "${att.filename}" is not an image (type: ${att.mimeType}). Use get_video, get_text_file, or get_binary_file as appropriate.`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(
+          `Attachment "${att.filename}" is not an image (type: ${att.mimeType}). Use get_video, get_text_file, or get_binary_file as appropriate.`,
+          { isError: true },
+        );
       }
 
       const { base64, mimeType } = await client.downloadUrl(att.content, att.mimeType);
@@ -306,24 +284,27 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       );
 
       const attachments = result.fields.attachment;
-      if (attachments.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No attachments on ${issueKey}` }] };
-      }
 
-      const lines: string[] = [`Attachments on ${issueKey} (${String(attachments.length)}):`, ''];
-      for (const att of attachments) {
-        const isImage = IMAGE_MIME_TYPES.has(att.mimeType);
-        const isVideo = isVideoFile(att.mimeType, att.filename);
-        const isText = isTextFile(att.mimeType, att.filename);
-        const tag = isImage ? ' [image]' : isVideo ? ' [video]' : isText ? ' [text]' : ' [binary]';
-        const mediaId =
-          att.mediaApiFileId !== undefined ? `, mediaFileId=${att.mediaApiFileId}` : '';
-        lines.push(
-          `- ${att.filename} (id=${att.id}${mediaId}, ${att.mimeType}, ${String(Math.round(att.size / 1024))}KB)${tag}`,
-        );
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        issueKey,
+        attachments: attachments.map((att) => {
+          const isImage = IMAGE_MIME_TYPES.has(att.mimeType);
+          const isVideo = isVideoFile(att.mimeType, att.filename);
+          const isText = isTextFile(att.mimeType, att.filename);
+          const kind = isImage ? 'image' : isVideo ? 'video' : isText ? 'text' : 'binary';
+          const row: Record<string, unknown> = {
+            id: att.id,
+            filename: att.filename,
+            mimeType: att.mimeType,
+            sizeKB: Math.round(att.size / 1024),
+            kind,
+          };
+          if (att.mediaApiFileId !== undefined) {
+            row['mediaFileId'] = att.mediaApiFileId;
+          }
+          return row;
+        }),
+      });
     },
   );
 
@@ -358,26 +339,14 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       if (!isTextFile(att.mimeType, att.filename)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for images, get_video for videos, or get_binary_file for other binaries.`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(
+          `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for images, get_video for videos, or get_binary_file for other binaries.`,
+          { isError: true },
+        );
       }
 
       const text = await client.downloadUrlAsText(att.content);
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `--- ${att.filename} (${att.mimeType}) ---\n${text}`,
-          },
-        ],
-      };
+      return textResult(`--- ${att.filename} (${att.mimeType}) ---\n${text}`);
     },
   );
 
@@ -413,15 +382,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       if (!isVideoFile(att.mimeType, att.filename)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Attachment "${att.filename}" is not a video (type: ${att.mimeType}). Use get_image for images, get_text_file for text, or get_binary_file for other binaries.`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(
+          `Attachment "${att.filename}" is not a video (type: ${att.mimeType}). Use get_image for images, get_text_file for text, or get_binary_file for other binaries.`,
+          { isError: true },
+        );
       }
 
       const { base64 } = await client.downloadUrl(att.content, att.mimeType);
@@ -465,39 +429,24 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       }
 
       if (isTextFile(att.mimeType, att.filename)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Attachment "${att.filename}" is a text file (type: ${att.mimeType}). Use get_text_file instead.`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(
+          `Attachment "${att.filename}" is a text file (type: ${att.mimeType}). Use get_text_file instead.`,
+          { isError: true },
+        );
       }
 
       if (IMAGE_MIME_TYPES.has(att.mimeType)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Attachment "${att.filename}" is an image (type: ${att.mimeType}). Use get_image instead.`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(
+          `Attachment "${att.filename}" is an image (type: ${att.mimeType}). Use get_image instead.`,
+          { isError: true },
+        );
       }
 
       if (isVideoFile(att.mimeType, att.filename)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Attachment "${att.filename}" is a video (type: ${att.mimeType}). Use get_video instead.`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(
+          `Attachment "${att.filename}" is a video (type: ${att.mimeType}). Use get_video instead.`,
+          { isError: true },
+        );
       }
 
       const { base64 } = await client.downloadUrl(att.content, att.mimeType);
@@ -530,15 +479,9 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     },
     async ({ issueKey, filename, content, contentBase64, mimeType }) => {
       if ((content === undefined) === (contentBase64 === undefined)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: 'Provide exactly one of content (text) or contentBase64 (binary).',
-            },
-          ],
+        return textResult('Provide exactly one of content (text) or contentBase64 (binary).', {
           isError: true,
-        };
+        });
       }
 
       const data =
@@ -556,11 +499,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
 
       const first = uploaded[0];
       const idInfo = first !== undefined ? ` (id=${first.id})` : '';
-      return {
-        content: [
-          { type: 'text' as const, text: `Attached "${filename}" to ${issueKey}${idInfo}` },
-        ],
-      };
+      return textResult(`Attached "${filename}" to ${issueKey}${idInfo}`);
     },
   );
 
@@ -575,9 +514,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     },
     async ({ attachmentId }) => {
       await client.del(`/rest/api/3/attachment/${encodeURIComponent(attachmentId)}`);
-      return {
-        content: [{ type: 'text' as const, text: `Deleted attachment ${attachmentId}` }],
-      };
+      return textResult(`Deleted attachment ${attachmentId}`);
     },
   );
 }

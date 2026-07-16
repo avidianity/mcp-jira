@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
-import type { JiraWorklogPage } from '@/jira/types';
-import { markdownToAdf } from '@/jira/adf';
+import type { JiraWorklog, JiraWorklogPage } from '@/jira/types';
+import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -20,12 +21,29 @@ export function toJiraDateTime(input?: string): string {
   return date.toISOString().replace('Z', '+0000');
 }
 
+function worklogToAgentView(wl: JiraWorklog): Record<string, unknown> {
+  const view: Record<string, unknown> = {
+    id: wl.id,
+    author: wl.author.displayName,
+    timeSpent: wl.timeSpent,
+    timeSpentSeconds: wl.timeSpentSeconds,
+    started: wl.started,
+  };
+  if (wl.comment !== undefined) {
+    const comment = adfToMarkdown(wl.comment);
+    if (comment.length > 0) {
+      view['comment'] = comment;
+    }
+  }
+  return view;
+}
+
 export function registerWorklogTools(server: McpServer, client: JiraClient): void {
   server.registerTool(
     'get_worklogs',
     {
       description:
-        'Get work log entries (logged time) for a Jira issue, including who logged time, how much, and when.',
+        'Get work log entries (logged time) for a Jira issue, including who logged time, how much, when, and optional Markdown comments (TOON response).',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
       },
@@ -35,18 +53,11 @@ export function registerWorklogTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/worklog`,
       );
 
-      if (result.worklogs.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No worklogs on ${issueKey}` }] };
-      }
-
-      const lines: string[] = [`Worklogs on ${issueKey} (${String(result.total)}):`, ''];
-      for (const wl of result.worklogs) {
-        lines.push(
-          `- [id ${wl.id}] ${wl.author.displayName}: ${wl.timeSpent} (started ${wl.started})`,
-        );
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        issueKey,
+        total: result.total,
+        worklogs: result.worklogs.map(worklogToAgentView),
+      });
     },
   );
 
@@ -75,9 +86,7 @@ export function registerWorklogTools(server: McpServer, client: JiraClient): voi
       }
 
       await client.post(`/rest/api/3/issue/${encodeURIComponent(issueKey)}/worklog`, body);
-      return {
-        content: [{ type: 'text' as const, text: `Logged ${timeSpent} on ${issueKey}` }],
-      };
+      return textResult(`Logged ${timeSpent} on ${issueKey}`);
     },
   );
 
@@ -113,9 +122,7 @@ export function registerWorklogTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(worklogId)}`,
         body,
       );
-      return {
-        content: [{ type: 'text' as const, text: `Updated worklog ${worklogId} on ${issueKey}` }],
-      };
+      return textResult(`Updated worklog ${worklogId} on ${issueKey}`);
     },
   );
 
@@ -133,9 +140,7 @@ export function registerWorklogTools(server: McpServer, client: JiraClient): voi
       await client.del(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(worklogId)}`,
       );
-      return {
-        content: [{ type: 'text' as const, text: `Deleted worklog ${worklogId} from ${issueKey}` }],
-      };
+      return textResult(`Deleted worklog ${worklogId} from ${issueKey}`);
     },
   );
 }

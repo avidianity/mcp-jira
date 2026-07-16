@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraComment, JiraCommentPage } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -55,37 +56,33 @@ export function searchComments(comments: SearchableComment[], query: string): Se
   return fuse.search(query.trim()).map((result) => result.item);
 }
 
-function formatSearchableComments(
+export function commentsToAgentView(
   comments: SearchableComment[],
   total: number,
   startAt: number,
-): string {
+): Record<string, unknown> {
   const end = startAt + comments.length;
-  const lines: string[] = [
-    `Comments (${String(startAt + 1)}-${String(end)} of ${String(total)})`,
-    '',
-  ];
-
-  for (const comment of comments) {
-    const edited = comment.updated !== comment.created ? `, edited ${comment.updated}` : '';
-    lines.push(`--- [id ${comment.id}] ${comment.author} (${comment.created}${edited}) ---`);
-    lines.push(comment.body);
-    lines.push('');
-  }
-
+  const view: Record<string, unknown> = {
+    startAt,
+    end,
+    total,
+    comments: comments.map((comment) => {
+      const row: Record<string, unknown> = {
+        id: comment.id,
+        author: comment.author,
+        created: comment.created,
+        body: comment.body,
+      };
+      if (comment.updated !== comment.created) {
+        row['updated'] = comment.updated;
+      }
+      return row;
+    }),
+  };
   if (end < total) {
-    lines.push(`Use startAt=${String(end)} to see more comments.`);
+    view['nextStartAt'] = end;
   }
-
-  return lines.join('\n');
-}
-
-function formatComments(result: JiraCommentPage): string {
-  return formatSearchableComments(
-    result.comments.map(toSearchableComment),
-    result.total,
-    result.startAt,
-  );
+  return view;
 }
 
 async function fetchAllComments(
@@ -123,8 +120,8 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
     'get_issue_comments',
     {
       description:
-        'Get comments on a Jira issue. Bodies are converted from Jira format to Markdown. ' +
-        'Use sort to order by creation time, and search for fuzzy matching over author and body to avoid flooding context with unrelated comments.',
+        'Get comments on a Jira issue. Bodies are Markdown (converted from Jira ADF). ' +
+        'Response is TOON. Use sort to order by creation time, and search for fuzzy matching over author and body.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
         maxResults: z
@@ -160,14 +157,7 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
         const searchable = raw.map(toSearchableComment);
         const matched = searchComments(searchable, search);
         const page = matched.slice(offset, offset + limit);
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: formatSearchableComments(page, matched.length, offset),
-            },
-          ],
-        };
+        return toonResult(commentsToAgentView(page, matched.length, offset));
       }
 
       const params = new URLSearchParams();
@@ -180,7 +170,9 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
       const result = await client.get<JiraCommentPage>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment?${params.toString()}`,
       );
-      return { content: [{ type: 'text' as const, text: formatComments(result) }] };
+      return toonResult(
+        commentsToAgentView(result.comments.map(toSearchableComment), result.total, result.startAt),
+      );
     },
   );
 
@@ -188,8 +180,8 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
     'add_comment',
     {
       description:
-        'Add a comment to a Jira issue. The comment body should be written in Markdown and will be converted to Jira format automatically. ' +
-        "To mention/tag a user, use @[accountId] or @[Display Name|accountId] — use get_user to look up a user's accountId. " +
+        'Add a comment to a Jira issue. The comment body should be written in Markdown and will be converted to Jira ADF automatically. ' +
+        "To mention/tag a user, use @[accountId] or @[Display Name|accountId] - use get_user to look up a user's accountId. " +
         'Plain @Username text is NOT converted to a mention.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
@@ -205,9 +197,7 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
       await client.post(`/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, {
         body: adfBody,
       });
-      return {
-        content: [{ type: 'text' as const, text: `Added comment to ${issueKey}` }],
-      };
+      return textResult(`Added comment to ${issueKey}`);
     },
   );
 
@@ -230,9 +220,7 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
         { body: adfBody },
       );
-      return {
-        content: [{ type: 'text' as const, text: `Updated comment ${commentId} on ${issueKey}` }],
-      };
+      return textResult(`Updated comment ${commentId} on ${issueKey}`);
     },
   );
 
@@ -250,9 +238,7 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
       await client.del(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
       );
-      return {
-        content: [{ type: 'text' as const, text: `Deleted comment ${commentId} from ${issueKey}` }],
-      };
+      return textResult(`Deleted comment ${commentId} from ${issueKey}`);
     },
   );
 }

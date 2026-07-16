@@ -2,8 +2,21 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraUser } from '@/jira/types';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
+
+function userToAgentView(user: JiraUser): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    displayName: user.displayName,
+    accountId: user.accountId,
+    active: user.active,
+  };
+  if (user.emailAddress !== undefined) {
+    row['email'] = user.emailAddress;
+  }
+  return row;
+}
 
 export function registerUserTools(server: McpServer, client: JiraClient): void {
   server.registerTool(
@@ -12,27 +25,17 @@ export function registerUserTools(server: McpServer, client: JiraClient): void {
       description:
         'Search for a Jira user by name or email. Returns account IDs needed for assigning issues.',
       inputSchema: {
-        query: z.string().describe('Search query — user display name or email address'),
+        query: z.string().describe('Search query - user display name or email address'),
       },
     },
     async ({ query }) => {
       const params = new URLSearchParams({ query });
       const users = await client.get<JiraUser[]>(`/rest/api/3/user/search?${params.toString()}`);
 
-      if (users.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: `No users found matching "${query}"` }],
-        };
-      }
-
-      const lines: string[] = [`Users matching "${query}":`, ''];
-      for (const user of users) {
-        const email = user.emailAddress ?? 'no email';
-        const status = user.active ? 'active' : 'inactive';
-        lines.push(`  ${user.displayName} (${email}) — accountId: ${user.accountId} [${status}]`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        query,
+        users: users.map(userToAgentView),
+      });
     },
   );
 
@@ -52,9 +55,7 @@ export function registerUserTools(server: McpServer, client: JiraClient): void {
     async ({ issueKey, accountId }) => {
       await client.put(`/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`, { accountId });
       const action = accountId === null ? 'Unassigned' : `Assigned to ${accountId}`;
-      return {
-        content: [{ type: 'text' as const, text: `${action}: ${issueKey}` }],
-      };
+      return textResult(`${action}: ${issueKey}`);
     },
   );
 
@@ -67,15 +68,7 @@ export function registerUserTools(server: McpServer, client: JiraClient): void {
     },
     async () => {
       const user = await client.get<JiraUser>('/rest/api/3/myself');
-      const email = user.emailAddress ?? 'no email';
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `${user.displayName} (${email}) — accountId: ${user.accountId}`,
-          },
-        ],
-      };
+      return toonResult(userToAgentView(user));
     },
   );
 
@@ -99,10 +92,7 @@ export function registerUserTools(server: McpServer, client: JiraClient): void {
     },
     async ({ projectKey, issueKey, query }) => {
       if (projectKey === undefined && issueKey === undefined) {
-        return {
-          content: [{ type: 'text' as const, text: 'Provide either projectKey or issueKey.' }],
-          isError: true,
-        };
+        return textResult('Provide either projectKey or issueKey.', { isError: true });
       }
 
       const params = new URLSearchParams();
@@ -120,17 +110,9 @@ export function registerUserTools(server: McpServer, client: JiraClient): void {
         `/rest/api/3/user/assignable/search?${params.toString()}`,
       );
 
-      if (users.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No assignable users found.' }] };
-      }
-
-      const lines: string[] = ['Assignable users:', ''];
-      for (const user of users) {
-        const email = user.emailAddress ?? 'no email';
-        lines.push(`  ${user.displayName} (${email}) — accountId: ${user.accountId}`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        users: users.map(userToAgentView),
+      });
     },
   );
 }

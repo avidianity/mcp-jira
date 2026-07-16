@@ -2,6 +2,34 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraComponent, JiraProject, JiraProjectPage, JiraVersion } from '@/jira/types';
+import { textResult, toonResult } from '@/format/response';
+
+function versionStatus(v: JiraVersion): string {
+  return v.released ? 'Released' : v.archived ? 'Archived' : 'Unreleased';
+}
+
+function versionToAgentView(v: JiraVersion): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    id: v.id,
+    name: v.name,
+    status: versionStatus(v),
+  };
+  if (v.releaseDate !== undefined) {
+    row['releaseDate'] = v.releaseDate;
+  }
+  return row;
+}
+
+function componentToAgentView(c: JiraComponent): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    id: c.id,
+    name: c.name,
+  };
+  if (c.description !== undefined && c.description.length > 0) {
+    row['description'] = c.description;
+  }
+  return row;
+}
 
 export function registerProjectTools(server: McpServer, client: JiraClient): void {
   server.registerTool(
@@ -35,23 +63,23 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/project/search?${params.toString()}`,
       );
 
-      const lines: string[] = [
-        `Projects (${String(result.startAt + 1)}-${String(result.startAt + result.values.length)} of ${String(result.total)})`,
-        '',
-      ];
-      for (const project of result.values) {
-        const lead = project.lead !== undefined ? ` (Lead: ${project.lead.displayName})` : '';
-        lines.push(`${project.key}: ${project.name}${lead}`);
-      }
-
-      if (result.startAt + result.values.length < result.total) {
-        lines.push(
-          '',
-          `Use startAt=${String(result.startAt + result.values.length)} to see more projects.`,
-        );
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      const end = result.startAt + result.values.length;
+      return toonResult({
+        startAt: result.startAt,
+        end,
+        total: result.total,
+        projects: result.values.map((p) => {
+          const row: Record<string, unknown> = {
+            key: p.key,
+            name: p.name,
+          };
+          if (p.lead !== undefined) {
+            row['lead'] = p.lead.displayName;
+          }
+          return row;
+        }),
+        ...(end < result.total ? { nextStartAt: end } : {}),
+      });
     },
   );
 
@@ -69,44 +97,40 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/project/${encodeURIComponent(projectKeyOrId)}`,
       );
 
-      const lines: string[] = [`Project: ${project.key}`, `Name: ${project.name}`];
+      const view: Record<string, unknown> = {
+        key: project.key,
+        name: project.name,
+      };
 
       if (project.description !== undefined && project.description.length > 0) {
-        lines.push(`Description: ${project.description}`);
+        view['description'] = project.description;
       }
       if (project.lead !== undefined) {
-        lines.push(`Lead: ${project.lead.displayName}`);
+        view['lead'] = project.lead.displayName;
       }
 
       if (project.issueTypes !== undefined && project.issueTypes.length > 0) {
-        lines.push('', 'Issue Types:');
-        for (const it of project.issueTypes) {
-          const desc =
-            it.description !== undefined && it.description.length > 0 ? ` — ${it.description}` : '';
-          const sub = it.subtask ? ' (subtask)' : '';
-          lines.push(`  - ${it.name}${sub}${desc}`);
-        }
+        view['issueTypes'] = project.issueTypes.map((it) => {
+          const row: Record<string, unknown> = {
+            name: it.name,
+            subtask: it.subtask,
+          };
+          if (it.description !== undefined && it.description.length > 0) {
+            row['description'] = it.description;
+          }
+          return row;
+        });
       }
 
       if (project.components !== undefined && project.components.length > 0) {
-        lines.push('', 'Components:');
-        for (const c of project.components) {
-          const desc =
-            c.description !== undefined && c.description.length > 0 ? ` — ${c.description}` : '';
-          lines.push(`  - ${c.name}${desc}`);
-        }
+        view['components'] = project.components.map(componentToAgentView);
       }
 
       if (project.versions !== undefined && project.versions.length > 0) {
-        lines.push('', 'Versions:');
-        for (const v of project.versions) {
-          const status = v.released ? 'Released' : v.archived ? 'Archived' : 'Unreleased';
-          const date = v.releaseDate !== undefined ? ` (${v.releaseDate})` : '';
-          lines.push(`  - ${v.name} [${status}]${date}`);
-        }
+        view['versions'] = project.versions.map(versionToAgentView);
       }
 
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult(view);
     },
   );
 
@@ -124,20 +148,10 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/project/${encodeURIComponent(projectKeyOrId)}/versions`,
       );
 
-      if (versions.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: `No versions in ${projectKeyOrId}` }],
-        };
-      }
-
-      const lines: string[] = [`Versions in ${projectKeyOrId}:`, ''];
-      for (const v of versions) {
-        const status = v.released ? 'Released' : v.archived ? 'Archived' : 'Unreleased';
-        const date = v.releaseDate !== undefined ? ` (${v.releaseDate})` : '';
-        lines.push(`- ${v.name} (id=${v.id}) [${status}]${date}`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        projectKeyOrId,
+        versions: versions.map(versionToAgentView),
+      });
     },
   );
 
@@ -175,14 +189,7 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
       }
 
       const version = await client.post<JiraVersion>('/rest/api/3/version', body);
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Created version "${version.name}" (id=${version.id}) in ${project.key}`,
-          },
-        ],
-      };
+      return textResult(`Created version "${version.name}" (id=${version.id}) in ${project.key}`);
     },
   );
 
@@ -219,9 +226,7 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
       }
 
       await client.put(`/rest/api/3/version/${encodeURIComponent(versionId)}`, body);
-      return {
-        content: [{ type: 'text' as const, text: `Updated version ${versionId}` }],
-      };
+      return textResult(`Updated version ${versionId}`);
     },
   );
 
@@ -238,20 +243,10 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/project/${encodeURIComponent(projectKeyOrId)}/components`,
       );
 
-      if (components.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: `No components in ${projectKeyOrId}` }],
-        };
-      }
-
-      const lines: string[] = [`Components in ${projectKeyOrId}:`, ''];
-      for (const c of components) {
-        const desc =
-          c.description !== undefined && c.description.length > 0 ? ` — ${c.description}` : '';
-        lines.push(`- ${c.name} (id=${c.id})${desc}`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        projectKeyOrId,
+        components: components.map(componentToAgentView),
+      });
     },
   );
 
@@ -279,14 +274,9 @@ export function registerProjectTools(server: McpServer, client: JiraClient): voi
       }
 
       const component = await client.post<JiraComponent>('/rest/api/3/component', body);
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Created component "${component.name}" (id=${component.id}) in ${projectKey}`,
-          },
-        ],
-      };
+      return textResult(
+        `Created component "${component.name}" (id=${component.id}) in ${projectKey}`,
+      );
     },
   );
 }

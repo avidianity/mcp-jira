@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraUser } from '@/jira/types';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -15,6 +16,17 @@ interface JiraVotes {
   votes: number;
   hasVoted: boolean;
   voters?: JiraUser[] | undefined;
+}
+
+function userToAgentView(user: JiraUser): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    displayName: user.displayName,
+    accountId: user.accountId,
+  };
+  if (user.emailAddress !== undefined) {
+    row['email'] = user.emailAddress;
+  }
+  return row;
 }
 
 export function registerParticipationTools(server: McpServer, client: JiraClient): void {
@@ -31,16 +43,12 @@ export function registerParticipationTools(server: McpServer, client: JiraClient
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/watchers`,
       );
 
-      const lines: string[] = [`Watchers on ${issueKey} (${String(result.watchCount)}):`, ''];
-      for (const user of result.watchers ?? []) {
-        const email = user.emailAddress ?? user.accountId;
-        lines.push(`  ${user.displayName} (${email}) — accountId: ${user.accountId}`);
-      }
-      if ((result.watchers ?? []).length === 0) {
-        lines.push('  (no watchers, or you lack permission to view them)');
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        issueKey,
+        watchCount: result.watchCount,
+        isWatching: result.isWatching,
+        watchers: (result.watchers ?? []).map(userToAgentView),
+      });
     },
   );
 
@@ -65,9 +73,7 @@ export function registerParticipationTools(server: McpServer, client: JiraClient
         accountId ?? null,
       );
       const who = accountId ?? 'you';
-      return {
-        content: [{ type: 'text' as const, text: `Added watcher (${who}) to ${issueKey}` }],
-      };
+      return textResult(`Added watcher (${who}) to ${issueKey}`);
     },
   );
 
@@ -86,9 +92,7 @@ export function registerParticipationTools(server: McpServer, client: JiraClient
       await client.del(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/watchers?${params.toString()}`,
       );
-      return {
-        content: [{ type: 'text' as const, text: `Removed watcher ${accountId} from ${issueKey}` }],
-      };
+      return textResult(`Removed watcher ${accountId} from ${issueKey}`);
     },
   );
 
@@ -105,15 +109,12 @@ export function registerParticipationTools(server: McpServer, client: JiraClient
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/votes`,
       );
 
-      const lines: string[] = [
-        `Votes on ${issueKey}: ${String(result.votes)} (you have ${result.hasVoted ? '' : 'not '}voted)`,
-        '',
-      ];
-      for (const user of result.voters ?? []) {
-        lines.push(`  ${user.displayName} — accountId: ${user.accountId}`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        issueKey,
+        votes: result.votes,
+        hasVoted: result.hasVoted,
+        voters: (result.voters ?? []).map(userToAgentView),
+      });
     },
   );
 
@@ -128,7 +129,7 @@ export function registerParticipationTools(server: McpServer, client: JiraClient
     },
     async ({ issueKey }) => {
       await client.post(`/rest/api/3/issue/${encodeURIComponent(issueKey)}/votes`, {});
-      return { content: [{ type: 'text' as const, text: `Voted for ${issueKey}` }] };
+      return textResult(`Voted for ${issueKey}`);
     },
   );
 
@@ -142,7 +143,7 @@ export function registerParticipationTools(server: McpServer, client: JiraClient
     },
     async ({ issueKey }) => {
       await client.del(`/rest/api/3/issue/${encodeURIComponent(issueKey)}/votes`);
-      return { content: [{ type: 'text' as const, text: `Removed your vote from ${issueKey}` }] };
+      return textResult(`Removed your vote from ${issueKey}`);
     },
   );
 }

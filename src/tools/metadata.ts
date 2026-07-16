@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraIssueType, JiraPriority, JiraStatus } from '@/jira/types';
+import { textResult, toonResult } from '@/format/response';
 
 interface JiraField {
   id: string;
@@ -41,28 +42,29 @@ interface CreateMetaFieldsPage {
   fields: CreateMetaField[];
 }
 
-function formatCreateMetaField(field: CreateMetaField): string {
+function createMetaFieldToAgentView(field: CreateMetaField): Record<string, unknown> {
   const id = field.fieldId ?? field.key ?? field.name;
-  const type = field.schema?.type ?? 'unknown';
-  const items = field.schema?.items !== undefined ? `<${field.schema.items}>` : '';
-  const req = field.required ? 'required' : 'optional';
-  const parts = [`- ${field.name} (id=${id}, ${req}, type=${type}${items})`];
-
+  const view: Record<string, unknown> = {
+    name: field.name,
+    id,
+    required: field.required,
+    type: field.schema?.type ?? 'unknown',
+  };
+  if (field.schema?.items !== undefined) {
+    view['items'] = field.schema.items;
+  }
   if (field.allowedValues !== undefined && field.allowedValues.length > 0) {
-    const sample = field.allowedValues.slice(0, 12).map((v) => {
+    view['allowedValues'] = field.allowedValues.slice(0, 12).map((v) => {
       if (v.name !== undefined) return v.name;
       if (v.value !== undefined) return v.value;
       if (v.id !== undefined) return `id:${v.id}`;
       return '?';
     });
-    const more =
-      field.allowedValues.length > sample.length
-        ? ` …+${String(field.allowedValues.length - sample.length)}`
-        : '';
-    parts.push(`    allowed: ${sample.join(', ')}${more}`);
+    if (field.allowedValues.length > 12) {
+      view['allowedValuesTotal'] = field.allowedValues.length;
+    }
   }
-
-  return parts.join('\n');
+  return view;
 }
 
 async function fetchAllCreateMetaFields(
@@ -103,12 +105,13 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
     },
     async () => {
       const types = await client.get<JiraIssueType[]>('/rest/api/3/issuetype');
-      const lines: string[] = ['Issue types:', ''];
-      for (const t of types) {
-        const sub = t.subtask ? ' (subtask)' : '';
-        lines.push(`- ${t.name} (id=${t.id})${sub}`);
-      }
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        issueTypes: types.map((t) => ({
+          id: t.id,
+          name: t.name,
+          subtask: t.subtask,
+        })),
+      });
     },
   );
 
@@ -121,11 +124,13 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
     },
     async () => {
       const statuses = await client.get<JiraStatus[]>('/rest/api/3/status');
-      const lines: string[] = ['Statuses:', ''];
-      for (const s of statuses) {
-        lines.push(`- ${s.name} (id=${s.id}) [${s.statusCategory.name}]`);
-      }
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        statuses: statuses.map((s) => ({
+          id: s.id,
+          name: s.name,
+          category: s.statusCategory.name,
+        })),
+      });
     },
   );
 
@@ -137,11 +142,12 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
     },
     async () => {
       const priorities = await client.get<JiraPriority[]>('/rest/api/3/priority');
-      const lines: string[] = ['Priorities:', ''];
-      for (const p of priorities) {
-        lines.push(`- ${p.name} (id=${p.id})`);
-      }
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        priorities: priorities.map((p) => ({
+          id: p.id,
+          name: p.name,
+        })),
+      });
     },
   );
 
@@ -163,19 +169,19 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
       const filtered =
         needle !== undefined ? fields.filter((f) => f.name.toLowerCase().includes(needle)) : fields;
 
-      if (filtered.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: 'No matching fields found.' }],
-        };
-      }
-
-      const lines: string[] = [`Fields (${String(filtered.length)}):`, ''];
-      for (const f of filtered) {
-        const kind = f.custom ? 'custom' : 'system';
-        const type = f.schema?.type !== undefined ? `, type=${f.schema.type}` : '';
-        lines.push(`- ${f.name} (id=${f.id}, ${kind}${type})`);
-      }
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        fields: filtered.map((f) => {
+          const row: Record<string, unknown> = {
+            id: f.id,
+            name: f.name,
+            kind: f.custom ? 'custom' : 'system',
+          };
+          if (f.schema?.type !== undefined) {
+            row['type'] = f.schema.type;
+          }
+          return row;
+        }),
+      });
     },
   );
 
@@ -202,48 +208,22 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
       );
       if (match === undefined) {
         const names = issueTypes.map((t) => `${t.name} (id=${t.id})`).join(', ');
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Issue type "${issueType}" not found for project ${projectKey}. Available: ${names || '(none)'}`,
-            },
-          ],
-        };
+        return textResult(
+          `Issue type "${issueType}" not found for project ${projectKey}. Available: ${names || '(none)'}`,
+          { isError: true },
+        );
       }
 
       const allFields = await fetchAllCreateMetaFields(client, projectKey, match.id);
-
-      const lines: string[] = [
-        `Create meta for ${projectKey} / ${match.name} (id=${match.id})`,
-        `Fields: ${String(allFields.length)}`,
-        '',
-        'Required fields (must be set on create_issue):',
-      ];
-
       const required = allFields.filter((f) => f.required);
       const optional = allFields.filter((f) => !f.required);
 
-      if (required.length === 0) {
-        lines.push('  (none beyond project/issuetype defaults)');
-      } else {
-        for (const f of required) {
-          lines.push(formatCreateMetaField(f));
-        }
-      }
-
-      lines.push('', 'Optional fields:');
-      for (const f of optional) {
-        lines.push(formatCreateMetaField(f));
-      }
-
-      lines.push(
-        '',
-        'Tip: pass system fields via dedicated params when available (components, fixVersions, labels, …).',
-        'Pass custom fields via create_issue.fields using the field id, e.g. fields: {"customfield_10099":"https://…"}',
-      );
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        projectKey,
+        issueType: { id: match.id, name: match.name },
+        requiredFields: required.map(createMetaFieldToAgentView),
+        optionalFields: optional.map(createMetaFieldToAgentView),
+      });
     },
   );
 
@@ -275,21 +255,15 @@ export function registerMetadataTools(server: McpServer, client: JiraClient): vo
       }
 
       const result = await client.get<JiraLabelPage>(`/rest/api/3/label?${params.toString()}`);
+      const end = result.startAt + result.values.length;
 
-      if (result.values.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No labels found.' }] };
-      }
-
-      const lines: string[] = [
-        `Labels (${String(result.startAt + 1)}-${String(result.startAt + result.values.length)} of ${String(result.total)}):`,
-        '',
-        result.values.join(', '),
-      ];
-      if (!result.isLast) {
-        lines.push('', `Use startAt=${String(result.startAt + result.values.length)} for more.`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        startAt: result.startAt,
+        end,
+        total: result.total,
+        labels: result.values,
+        ...(!result.isLast ? { nextStartAt: end } : {}),
+      });
     },
   );
 }

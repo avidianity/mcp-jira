@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraTransitionsResult } from '@/jira/types';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -20,14 +21,15 @@ export function registerTransitionTools(server: McpServer, client: JiraClient): 
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`,
       );
 
-      const lines: string[] = [`Available transitions for ${issueKey}:`, ''];
-      for (const t of result.transitions) {
-        lines.push(
-          `  ID: ${t.id} | Name: ${t.name} | To: ${t.to.name} (${t.to.statusCategory.name})`,
-        );
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        issueKey,
+        transitions: result.transitions.map((t) => ({
+          id: t.id,
+          name: t.name,
+          to: t.to.name,
+          category: t.to.statusCategory.name,
+        })),
+      });
     },
   );
 
@@ -45,9 +47,7 @@ export function registerTransitionTools(server: McpServer, client: JiraClient): 
       await client.post(`/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`, {
         transition: { id: transitionId },
       });
-      return {
-        content: [{ type: 'text' as const, text: `Transitioned issue ${issueKey}` }],
-      };
+      return textResult(`Transitioned issue ${issueKey}`);
     },
   );
 }

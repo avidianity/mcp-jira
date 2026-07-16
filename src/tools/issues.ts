@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
-import type { JiraChangelogPage, JiraIssue, JiraSearchResult } from '@/jira/types';
+import type { JiraChangelogPage, JiraIssue, JiraSearchResult, JiraUser } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -140,98 +141,124 @@ const additionalFieldsSchema = z
       'Cannot override dedicated params (project, summary, components, etc.).',
   );
 
-function formatIssue(issue: JiraIssue): string {
-  const f = issue.fields;
-  const baseUrl = issue.self.split('/rest/')[0] ?? '';
-  const lines: string[] = [
-    `Issue: ${issue.key}`,
-    `URL: ${baseUrl}/browse/${issue.key}`,
-    `Summary: ${f.summary}`,
-    `Status: ${f.status.name} (${f.status.statusCategory.name})`,
-    `Type: ${f.issuetype.name}`,
-  ];
-
-  if (f.priority !== null) {
-    lines.push(`Priority: ${f.priority.name}`);
+function userView(
+  user: JiraUser | null,
+): { displayName: string; accountId: string; email?: string } | undefined {
+  if (user === null) {
+    return undefined;
   }
-  if (f.assignee !== null) {
-    const email = f.assignee.emailAddress ?? f.assignee.accountId;
-    lines.push(`Assignee: ${f.assignee.displayName} (${email})`);
+  const view: { displayName: string; accountId: string; email?: string } = {
+    displayName: user.displayName,
+    accountId: user.accountId,
+  };
+  if (user.emailAddress !== undefined) {
+    view.email = user.emailAddress;
   }
-  if (f.reporter !== null) {
-    const email = f.reporter.emailAddress ?? f.reporter.accountId;
-    lines.push(`Reporter: ${f.reporter.displayName} (${email})`);
-  }
-  if (f.labels.length > 0) {
-    lines.push(`Labels: ${f.labels.join(', ')}`);
-  }
-  if (f.components.length > 0) {
-    lines.push(`Components: ${f.components.map((c) => c.name).join(', ')}`);
-  }
-  if (f.fixVersions.length > 0) {
-    lines.push(`Fix Versions: ${f.fixVersions.map((v) => v.name).join(', ')}`);
-  }
-  if (f.resolution !== null) {
-    lines.push(`Resolution: ${f.resolution.name}`);
-  }
-  if (f.parent !== undefined) {
-    lines.push(`Parent: ${f.parent.key} - ${f.parent.fields.summary}`);
-  }
-
-  lines.push(`Created: ${f.created}`);
-  lines.push(`Updated: ${f.updated}`);
-
-  const description = adfToMarkdown(f.description);
-  if (description.length > 0) {
-    lines.push('', 'Description:', description);
-  }
-
-  if (f.subtasks.length > 0) {
-    lines.push('', 'Subtasks:');
-    for (const subtask of f.subtasks) {
-      lines.push(`  - ${subtask.key}: ${subtask.fields.summary} [${subtask.fields.status.name}]`);
-    }
-  }
-
-  if (f.issuelinks.length > 0) {
-    lines.push('', 'Linked Issues:');
-    for (const link of f.issuelinks) {
-      if (link.outwardIssue !== undefined) {
-        lines.push(
-          `  - ${link.type.outward} ${link.outwardIssue.key}: ${link.outwardIssue.fields.summary}`,
-        );
-      }
-      if (link.inwardIssue !== undefined) {
-        lines.push(
-          `  - ${link.type.inward} ${link.inwardIssue.key}: ${link.inwardIssue.fields.summary}`,
-        );
-      }
-    }
-  }
-
-  return lines.join('\n');
+  return view;
 }
 
-function formatSearchResult(result: JiraSearchResult): string {
-  const lines: string[] = [
-    `Found ${String(result.issues.length)} issues${result.isLast ? '' : ' (more available)'}`,
-    '',
-  ];
+/** Agent-facing issue view: structured fields + Markdown description (never raw ADF). */
+export function issueToAgentView(issue: JiraIssue): Record<string, unknown> {
+  const f = issue.fields;
+  const baseUrl = issue.self.split('/rest/')[0] ?? '';
+  const description = adfToMarkdown(f.description);
 
-  for (const issue of result.issues) {
-    const f = issue.fields;
-    const assignee = f.assignee !== null ? ` → ${f.assignee.displayName}` : '';
-    lines.push(`${issue.key}: ${f.summary} [${f.status.name}]${assignee}`);
+  const view: Record<string, unknown> = {
+    key: issue.key,
+    url: `${baseUrl}/browse/${issue.key}`,
+    summary: f.summary,
+    status: f.status.name,
+    statusCategory: f.status.statusCategory.name,
+    type: f.issuetype.name,
+    created: f.created,
+    updated: f.updated,
+  };
+
+  const assignee = userView(f.assignee);
+  if (assignee !== undefined) {
+    view['assignee'] = assignee;
+  }
+  const reporter = userView(f.reporter);
+  if (reporter !== undefined) {
+    view['reporter'] = reporter;
+  }
+  if (f.priority !== null) {
+    view['priority'] = f.priority.name;
+  }
+  if (f.labels.length > 0) {
+    view['labels'] = f.labels;
+  }
+  if (f.components.length > 0) {
+    view['components'] = f.components.map((c) => c.name);
+  }
+  if (f.fixVersions.length > 0) {
+    view['fixVersions'] = f.fixVersions.map((v) => v.name);
+  }
+  if (f.resolution !== null) {
+    view['resolution'] = f.resolution.name;
+  }
+  if (f.parent !== undefined) {
+    view['parent'] = {
+      key: f.parent.key,
+      summary: f.parent.fields.summary,
+      status: f.parent.fields.status.name,
+    };
+  }
+  if (description.length > 0) {
+    view['description'] = description;
+  }
+  if (f.subtasks.length > 0) {
+    view['subtasks'] = f.subtasks.map((subtask) => ({
+      key: subtask.key,
+      summary: subtask.fields.summary,
+      status: subtask.fields.status.name,
+    }));
+  }
+  if (f.issuelinks.length > 0) {
+    const links: { relation: string; key: string; summary: string }[] = [];
+    for (const link of f.issuelinks) {
+      if (link.outwardIssue !== undefined) {
+        links.push({
+          relation: link.type.outward,
+          key: link.outwardIssue.key,
+          summary: link.outwardIssue.fields.summary,
+        });
+      }
+      if (link.inwardIssue !== undefined) {
+        links.push({
+          relation: link.type.inward,
+          key: link.inwardIssue.key,
+          summary: link.inwardIssue.fields.summary,
+        });
+      }
+    }
+    view['links'] = links;
   }
 
+  return view;
+}
+
+export function searchResultToAgentView(result: JiraSearchResult): Record<string, unknown> {
+  const view: Record<string, unknown> = {
+    count: result.issues.length,
+    isLast: result.isLast,
+    issues: result.issues.map((issue) => {
+      const row: Record<string, unknown> = {
+        key: issue.key,
+        summary: issue.fields.summary,
+        status: issue.fields.status.name,
+      };
+      const assignee = userView(issue.fields.assignee);
+      if (assignee !== undefined) {
+        row['assignee'] = assignee.displayName;
+      }
+      return row;
+    }),
+  };
   if (!result.isLast && result.nextPageToken !== undefined) {
-    lines.push(
-      '',
-      `More results available. Use nextPageToken="${result.nextPageToken}" to see more.`,
-    );
+    view['nextPageToken'] = result.nextPageToken;
   }
-
-  return lines.join('\n');
+  return view;
 }
 
 export function registerIssueTools(server: McpServer, client: JiraClient): void {
@@ -251,7 +278,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
       const issue = await client.get<JiraIssue>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}`,
       );
-      return { content: [{ type: 'text' as const, text: formatIssue(issue) }] };
+      return toonResult(issueToAgentView(issue));
     },
   );
 
@@ -259,7 +286,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
     'search_issues',
     {
       description:
-        'Search for Jira issues using JQL (Jira Query Language). Returns a paginated list of matching issues with key, summary, status, and assignee.',
+        'Search for Jira issues using JQL (Jira Query Language). Returns a paginated list of matching issues with key, summary, status, and assignee (TOON format).',
       inputSchema: {
         jql: z.string().describe('JQL query string (e.g., "project = PROJ AND status = Open")'),
         maxResults: z
@@ -290,7 +317,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
       const result = await client.get<JiraSearchResult>(
         `/rest/api/3/search/jql?${params.toString()}`,
       );
-      return { content: [{ type: 'text' as const, text: formatSearchResult(result) }] };
+      return toonResult(searchResultToAgentView(result));
     },
   );
 
@@ -359,9 +386,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
         '/rest/api/3/issue',
         { fields },
       );
-      return {
-        content: [{ type: 'text' as const, text: `Created issue: ${result.key}` }],
-      };
+      return textResult(`Created issue: ${result.key}`);
     },
   );
 
@@ -416,9 +441,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
       });
 
       await client.put(`/rest/api/3/issue/${encodeURIComponent(issueKey)}`, { fields });
-      return {
-        content: [{ type: 'text' as const, text: `Updated issue: ${issueKey}` }],
-      };
+      return textResult(`Updated issue: ${issueKey}`);
     },
   );
 
@@ -440,9 +463,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
         deleteSubtasks: deleteSubtasks === true ? 'true' : 'false',
       });
       await client.del(`/rest/api/3/issue/${encodeURIComponent(issueKey)}?${params.toString()}`);
-      return {
-        content: [{ type: 'text' as const, text: `Deleted issue: ${issueKey}` }],
-      };
+      return textResult(`Deleted issue: ${issueKey}`);
     },
   );
 
@@ -450,7 +471,7 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
     'get_issue_changelog',
     {
       description:
-        'Get the change history (field-by-field audit log) of a Jira issue — who changed what and when. Useful for understanding how an issue reached its current state.',
+        'Get the change history (field-by-field audit log) of a Jira issue - who changed what and when. Useful for understanding how an issue reached its current state.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
         maxResults: z
@@ -479,31 +500,23 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/changelog?${params.toString()}`,
       );
 
-      if (result.values.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No change history for ${issueKey}` }] };
-      }
-
-      const lines: string[] = [
-        `Change history for ${issueKey} (${String(result.startAt + 1)}-${String(result.startAt + result.values.length)} of ${String(result.total)})`,
-        '',
-      ];
-      for (const entry of result.values) {
-        lines.push(`--- ${entry.author.displayName} (${entry.created}) ---`);
-        for (const item of entry.items) {
-          const from = item.fromString ?? '(none)';
-          const to = item.toString ?? '(none)';
-          lines.push(`  ${item.field}: ${from} → ${to}`);
-        }
-        lines.push('');
-      }
-
-      if (result.startAt + result.values.length < result.total) {
-        lines.push(
-          `Use startAt=${String(result.startAt + result.values.length)} to see more history.`,
-        );
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      const end = result.startAt + result.values.length;
+      return toonResult({
+        issueKey,
+        startAt: result.startAt,
+        end,
+        total: result.total,
+        entries: result.values.map((entry) => ({
+          author: entry.author.displayName,
+          created: entry.created,
+          changes: entry.items.map((item) => ({
+            field: item.field,
+            from: item.fromString,
+            to: item.toString,
+          })),
+        })),
+        ...(end < result.total ? { nextStartAt: end } : {}),
+      });
     },
   );
 }

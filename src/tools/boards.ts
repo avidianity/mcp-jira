@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraBoard, JiraBoardConfig, JiraSprint, JiraSprintPage } from '@/jira/types';
+import { textResult, toonResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -11,6 +12,24 @@ interface JiraBoardPage {
   total: number;
   isLast: boolean;
   values: JiraBoard[];
+}
+
+function sprintToAgentView(sprint: JiraSprint): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    id: sprint.id,
+    name: sprint.name,
+    state: sprint.state,
+  };
+  if (sprint.startDate !== undefined) {
+    row['startDate'] = sprint.startDate;
+  }
+  if (sprint.endDate !== undefined) {
+    row['endDate'] = sprint.endDate;
+  }
+  if (sprint.goal !== undefined && sprint.goal.length > 0) {
+    row['goal'] = sprint.goal;
+  }
+  return row;
 }
 
 export function registerBoardTools(server: McpServer, client: JiraClient): void {
@@ -50,21 +69,25 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
       }
 
       const result = await client.get<JiraBoardPage>(`/rest/agile/1.0/board?${params.toString()}`);
+      const end = result.startAt + result.values.length;
 
-      if (result.values.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No boards found.' }] };
-      }
-
-      const lines: string[] = ['Boards:', ''];
-      for (const board of result.values) {
-        const project = board.location !== undefined ? ` — ${board.location.projectKey}` : '';
-        lines.push(`- ${board.name} (ID: ${String(board.id)}, ${board.type})${project}`);
-      }
-      if (!result.isLast) {
-        lines.push('', `Use startAt=${String(result.startAt + result.values.length)} for more.`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        startAt: result.startAt,
+        end,
+        total: result.total,
+        boards: result.values.map((board) => {
+          const row: Record<string, unknown> = {
+            id: board.id,
+            name: board.name,
+            type: board.type,
+          };
+          if (board.location !== undefined) {
+            row['projectKey'] = board.location.projectKey;
+          }
+          return row;
+        }),
+        ...(!result.isLast ? { nextStartAt: end } : {}),
+      });
     },
   );
 
@@ -83,23 +106,22 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
         client.get<JiraBoardConfig>(`/rest/agile/1.0/board/${String(boardId)}/configuration`),
       ]);
 
-      const lines: string[] = [
-        `Board: ${board.name} (ID: ${String(board.id)})`,
-        `Type: ${board.type}`,
-      ];
+      const view: Record<string, unknown> = {
+        id: board.id,
+        name: board.name,
+        type: board.type,
+        columns: config.columnConfig.columns.map((col) => ({
+          name: col.name,
+          statusIds: col.statuses.map((s) => s.id),
+        })),
+      };
 
       if (board.location !== undefined) {
-        lines.push(`Project: ${board.location.projectKey} — ${board.location.projectName}`);
+        view['projectKey'] = board.location.projectKey;
+        view['projectName'] = board.location.projectName;
       }
 
-      lines.push('', 'Columns:');
-      for (const col of config.columnConfig.columns) {
-        const statuses = col.statuses.map((s) => s.id).join(', ');
-        const statusInfo = statuses.length > 0 ? ` (status IDs: ${statuses})` : '';
-        lines.push(`  - ${col.name}${statusInfo}`);
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult(view);
     },
   );
 
@@ -124,34 +146,11 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
         `/rest/agile/1.0/board/${String(boardId)}/sprint?${params.toString()}`,
       );
 
-      if (result.values.length === 0) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `No ${state ?? 'active'} sprints found for board ${String(boardId)}.`,
-            },
-          ],
-        };
-      }
-
-      const lines: string[] = [`Sprints for board ${String(boardId)}:`, ''];
-      for (const sprint of result.values) {
-        lines.push(`Sprint: ${sprint.name} (ID: ${String(sprint.id)})`);
-        lines.push(`  State: ${sprint.state}`);
-        if (sprint.startDate !== undefined) {
-          lines.push(`  Start: ${sprint.startDate}`);
-        }
-        if (sprint.endDate !== undefined) {
-          lines.push(`  End: ${sprint.endDate}`);
-        }
-        if (sprint.goal !== undefined && sprint.goal.length > 0) {
-          lines.push(`  Goal: ${sprint.goal}`);
-        }
-        lines.push('');
-      }
-
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      return toonResult({
+        boardId,
+        state: state ?? 'active',
+        sprints: result.values.map(sprintToAgentView),
+      });
     },
   );
 
@@ -181,14 +180,9 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
       }
 
       const sprint = await client.post<JiraSprint>('/rest/agile/1.0/sprint', body);
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Created sprint "${sprint.name}" (ID: ${String(sprint.id)}) on board ${String(boardId)}`,
-          },
-        ],
-      };
+      return textResult(
+        `Created sprint "${sprint.name}" (ID: ${String(sprint.id)}) on board ${String(boardId)}`,
+      );
     },
   );
 
@@ -209,9 +203,7 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
         startDate,
         endDate,
       });
-      return {
-        content: [{ type: 'text' as const, text: `Started sprint ${String(sprintId)}` }],
-      };
+      return textResult(`Started sprint ${String(sprintId)}`);
     },
   );
 
@@ -225,9 +217,7 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
     },
     async ({ sprintId }) => {
       await client.post(`/rest/agile/1.0/sprint/${String(sprintId)}`, { state: 'closed' });
-      return {
-        content: [{ type: 'text' as const, text: `Completed sprint ${String(sprintId)}` }],
-      };
+      return textResult(`Completed sprint ${String(sprintId)}`);
     },
   );
 
@@ -247,14 +237,7 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
       await client.post(`/rest/agile/1.0/sprint/${String(sprintId)}/issue`, {
         issues: issueKeys,
       });
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Moved ${String(issueKeys.length)} issue(s) to sprint ${String(sprintId)}`,
-          },
-        ],
-      };
+      return textResult(`Moved ${String(issueKeys.length)} issue(s) to sprint ${String(sprintId)}`);
     },
   );
 
@@ -271,14 +254,7 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
     },
     async ({ issueKeys }) => {
       await client.post('/rest/agile/1.0/backlog/issue', { issues: issueKeys });
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Moved ${String(issueKeys.length)} issue(s) to the backlog`,
-          },
-        ],
-      };
+      return textResult(`Moved ${String(issueKeys.length)} issue(s) to the backlog`);
     },
   );
 
@@ -300,11 +276,7 @@ export function registerBoardTools(server: McpServer, client: JiraClient): void 
         issues: issueKeys,
       });
       const action = epicKey === 'none' ? 'Removed from epic' : `Added to epic ${epicKey}`;
-      return {
-        content: [
-          { type: 'text' as const, text: `${action}: ${String(issueKeys.length)} issue(s)` },
-        ],
-      };
+      return textResult(`${action}: ${String(issueKeys.length)} issue(s)`);
     },
   );
 }

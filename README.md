@@ -59,13 +59,25 @@ mcp-jira --transport http --port 5485
 }
 ```
 
+## Data formats (agent boundary)
+
+| Direction                     | Format                                          | Notes                                                                                  |
+| ----------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Agent → MCP (rich text)       | **Markdown**                                    | Descriptions, comments, worklog comments. Converted to Jira **ADF** before REST calls. |
+| MCP → Agent (rich text)       | **Markdown**                                    | ADF from Jira is converted back to Markdown. Never raw ADF.                            |
+| MCP → Agent (structured data) | **[TOON](https://github.com/toon-format/toon)** | Lists, issue details, search hits, metadata, etc. Token-efficient vs JSON.             |
+| MCP → Agent (simple ack)      | Plain text                                      | Short success/error lines (`Created issue: PROJ-1`).                                   |
+| MCP → Agent (media)           | Image / resource / path                         | Unchanged binary/path modes for attachments.                                           |
+
+Mentions in Markdown: `@[accountId]` or `@[Display Name|accountId]` (plain `@Name` is not a mention).
+
 ## Tools
 
 ### Issues
 
 | Tool                    | Description                                                     |
 | ----------------------- | --------------------------------------------------------------- |
-| `get_issue`             | Get full issue details (description converted to Markdown)      |
+| `get_issue`             | Full issue details (Markdown description, TOON response)        |
 | `search_issues`         | Search via JQL with pagination                                  |
 | `create_issue`          | Create issue; supports components, fixVersions, custom `fields` |
 | `update_issue`          | Update issue fields (same field support as create)              |
