@@ -1,0 +1,5 @@
+# Path mode writes raw bytes
+
+Any attachment fetch tool with `output: "path"` writes the attachment's untransformed bytes to the local file - the same raw-byte mechanism used by `get_image`, `get_video`, and `get_binary_file`. In particular, `get_text_file`'s path mode deliberately **bypasses the UTF-8 text decoder** (`downloadUrlAsText`) and uses the raw byte path (`downloadUrl` + `writeAttachmentToTemp`) instead.
+
+We decided this because downstream consumers (other MCP servers, JSON/HAR parsers) open these files by path and require them to be byte-for-byte identical to the source, starting at byte 0. Routing text attachments through the decoder would strip a leading UTF-8 BOM and re-encode the content, breaking size/hash equality and, for example, making a `.har` file invalid JSON at byte 0. The trade-off is that the "text" tool carries a raw-byte branch that ignores its own text-oriented framing (no banner) in path mode; we chose fidelity over the simpler "just write the decoded string."

@@ -117,19 +117,19 @@ Mentions in Markdown: `@[accountId]` or `@[Display Name|accountId]` (plain `@Nam
 
 ### Links & attachments
 
-| Tool                | Description                                                   |
-| ------------------- | ------------------------------------------------------------- |
-| `link_issues`       | Link two issues together                                      |
-| `get_link_types`    | List available issue link types                               |
-| `delete_issue_link` | Delete a link by ID                                           |
-| `add_remote_link`   | Attach an external URL to an issue                            |
-| `list_attachments`  | List all attachments on an issue (shows image/media file IDs) |
-| `get_image`         | Fetch an image (`output`: `base64` or `path`)                 |
-| `get_video`         | Fetch a video (`output`: `base64` or `path`)                  |
-| `get_text_file`     | Fetch a text/source-file attachment as text                   |
-| `get_binary_file`   | Fetch a binary file (`output`: `base64` or `path`)            |
-| `add_attachment`    | Upload a file (text or base64 binary)                         |
-| `delete_attachment` | Delete an attachment by ID                                    |
+| Tool                | Description                                                                  |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `link_issues`       | Link two issues together                                                     |
+| `get_link_types`    | List available issue link types                                              |
+| `delete_issue_link` | Delete a link by ID                                                          |
+| `add_remote_link`   | Attach an external URL to an issue                                           |
+| `list_attachments`  | List all attachments on an issue (shows image/media file IDs)                |
+| `get_image`         | Fetch an image (`output`: `base64` or `path`)                                |
+| `get_video`         | Fetch a video (`output`: `base64` or `path`)                                 |
+| `get_text_file`     | Fetch a text/source file: `output` `text` (inline) or `path` (raw, faithful) |
+| `get_binary_file`   | Fetch a binary file (`output`: `base64` or `path`)                           |
+| `add_attachment`    | Upload a file (text or base64 binary)                                        |
+| `delete_attachment` | Delete an attachment by ID                                                   |
 
 ### Boards & sprints
 

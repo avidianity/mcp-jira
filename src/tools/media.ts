@@ -16,6 +16,13 @@ const outputModeSchema = z
     'How to return the file: "base64" embeds content in the MCP response; "path" writes to a temp file and returns the local path (for passing to other tools)',
   );
 
+const textOutputModeSchema = z
+  .enum(['text', 'path'])
+  .default('text')
+  .describe(
+    'How to return the file: "text" returns the decoded content inline with a banner header; "path" writes the raw bytes to a temp file (no banner, byte-for-byte faithful) and returns the local path for passing to other tools/parsers',
+  );
+
 const IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -128,6 +135,7 @@ const TEXT_FILE_EXTENSIONS = new Set([
   '.log',
   '.diff',
   '.patch',
+  '.har',
   '.swift',
   '.kt',
   '.kts',
@@ -217,6 +225,54 @@ function pathResult(att: JiraAttachment, filePath: string): ToolTextResult {
       `size: ${String(Math.round(att.size / 1024))}KB`,
     ].join('\n'),
   );
+}
+
+/** The subset of JiraClient that fetching a text attachment needs (kept small for testability). */
+export interface TextAttachmentClient {
+  get<T>(path: string): Promise<T>;
+  downloadUrl(url: string, mimeType: string): Promise<{ base64: string; mimeType: string }>;
+  downloadUrlAsText(url: string): Promise<string>;
+}
+
+/**
+ * Fetch a text-kind attachment. In `text` output mode the content is returned
+ * inline with a banner (decoded as UTF-8). In `path` output mode the raw bytes
+ * are written to a temp file with no banner - a faithful, byte-for-byte copy -
+ * so parsers (JSON, HAR, etc.) can open the file directly. See
+ * docs/adr/0001-path-mode-writes-raw-bytes.md.
+ */
+export async function getTextAttachment(
+  client: TextAttachmentClient,
+  args: { issueKey: string; fileId: string; output: 'text' | 'path' },
+): Promise<ToolTextResult> {
+  const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+    `/rest/api/3/issue/${encodeURIComponent(args.issueKey)}?fields=attachment`,
+  );
+
+  const att = attachments.fields.attachment.find(
+    (a) => a.id === args.fileId || a.mediaApiFileId === args.fileId,
+  );
+
+  if (att === undefined) {
+    return attachmentNotFound(args.issueKey, args.fileId);
+  }
+
+  if (!isTextFile(att.mimeType, att.filename)) {
+    return textResult(
+      `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for images, get_video for videos, or get_binary_file for other binaries.`,
+      { isError: true },
+    );
+  }
+
+  if (args.output === 'path') {
+    // Path mode is byte-faithful: use the raw byte path, never the text decoder.
+    const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+    const filePath = await writeAttachmentToTemp(att, base64);
+    return pathResult(att, filePath);
+  }
+
+  const text = await client.downloadUrlAsText(att.content);
+  return textResult(`--- ${att.filename} (${att.mimeType}) ---\n${text}`);
 }
 
 export function registerMediaTools(server: McpServer, client: JiraClient): void {
@@ -312,7 +368,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
     'get_text_file',
     {
       description:
-        'Fetch a text-based file attachment from a Jira issue and return its content as plain text. Supports common text formats including .txt, .md, .csv, .json, .xml, .yaml, .log, .sql, and source code files (.js, .ts, .py, .java, etc.). Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
+        'Fetch a text-based file attachment from a Jira issue. Supports common text formats including .txt, .md, .csv, .json, .xml, .yaml, .log, .sql, .har, and source code files (.js, .ts, .py, .java, etc.). ' +
+        'output="text" (default) returns the content inline, prefixed with a "--- filename (mimeType) ---" banner. ' +
+        'output="path" writes the raw attachment bytes to a temp file with NO banner (a byte-for-byte faithful copy) and returns the local path - use this to hand the file to parsers or other MCP tools (e.g. a JSON/HAR parser). ' +
+        'Use list_attachments to discover available files. Accepts either an attachment ID (numeric) or a media file ID (UUID).',
       inputSchema: {
         issueKey: z
           .string()
@@ -323,31 +382,10 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
           .describe(
             'The attachment ID (numeric) or media file ID (UUID) from attachment references',
           ),
+        output: textOutputModeSchema,
       },
     },
-    async ({ issueKey, fileId }) => {
-      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
-        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
-      );
-
-      const att = attachments.fields.attachment.find(
-        (a) => a.id === fileId || a.mediaApiFileId === fileId,
-      );
-
-      if (att === undefined) {
-        return attachmentNotFound(issueKey, fileId);
-      }
-
-      if (!isTextFile(att.mimeType, att.filename)) {
-        return textResult(
-          `Attachment "${att.filename}" is not a text file (type: ${att.mimeType}). Use get_image for images, get_video for videos, or get_binary_file for other binaries.`,
-          { isError: true },
-        );
-      }
-
-      const text = await client.downloadUrlAsText(att.content);
-      return textResult(`--- ${att.filename} (${att.mimeType}) ---\n${text}`);
-    },
+    async ({ issueKey, fileId, output }) => getTextAttachment(client, { issueKey, fileId, output }),
   );
 
   server.registerTool(
