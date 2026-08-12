@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraAttachment } from '@/jira/types';
-import { textResult, toonResult, type ToolTextResult } from '@/format/response';
+import { banner, textResult, toonResult, type ToolTextResult } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -195,7 +195,7 @@ function binaryResource(
     content: [
       {
         type: 'text' as const,
-        text: `--- ${attachmentMetaText(att)} ---`,
+        text: banner(attachmentMetaText(att)),
       },
       {
         type: 'resource' as const,
@@ -272,7 +272,7 @@ export async function getTextAttachment(
   }
 
   const text = await client.downloadUrlAsText(att.content);
-  return textResult(`--- ${att.filename} (${att.mimeType}) ---\n${text}`);
+  return textResult(`${banner(`${att.filename} (${att.mimeType})`)}\n${text}`);
 }
 
 export function registerMediaTools(server: McpServer, client: JiraClient): void {

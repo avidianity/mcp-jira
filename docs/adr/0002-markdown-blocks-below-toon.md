@@ -1,0 +1,7 @@
+# Markdown bodies ship below the TOON envelope
+
+Tools that return prose (`get_issue`, `get_issue_comments`, `get_worklogs`) split their response in two: a TOON **envelope** of structured fields and pagination counters, then each Markdown body below it under a `--- label ---` banner, written verbatim with real line breaks. Comment bodies, issue descriptions, and worklog comments never appear as TOON values.
+
+We decided this because TOON has no multi-line scalar. A body containing line breaks is encoded as a single quoted physical line with `\n` escapes, so a long comment becomes one multi-thousand-character line - a real Jira comment measured 3685 characters on one line - and clients that cap line length when rendering tool output silently drop everything past the cap. Splitting the response is the only fix that stays inside TOON's grammar; the alternatives were encoding each body as a TOON array of one-line-per-element strings (real line breaks, but heavy quoting overhead and an unnatural read) or hard-wrapping long lines (corrupts code blocks and tables).
+
+The trade-off is that a response is no longer a single decodable TOON document, and a body containing a line that looks like a banner is not escaped. We accepted both: blocks are read by agents, never parsed back, and the split also costs slightly fewer tokens than the escaped form. For comments we went further and moved author and timestamps into the banner rather than keeping a parallel TOON table, so an agent cannot misattribute a body to the wrong author.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { toJiraDateTime } from '../src/tools/worklogs.ts';
+import { toJiraDateTime, worklogCommentBlocks } from '../src/tools/worklogs.ts';
+import type { JiraWorklog } from '../src/jira/types.ts';
 
 describe('toJiraDateTime', () => {
   it('formats an ISO string into Jira format with a +0000 offset and no trailing Z', () => {
@@ -16,5 +17,34 @@ describe('toJiraDateTime', () => {
 
   it('throws on an invalid date', () => {
     expect(() => toJiraDateTime('not-a-date')).toThrow('Invalid date');
+  });
+});
+
+describe('worklogCommentBlocks', () => {
+  function worklog(id: string, text?: string): JiraWorklog {
+    const base = { id, author: { accountId: 'a', displayName: 'Ada', active: true } };
+    if (text === undefined) {
+      return base as unknown as JiraWorklog;
+    }
+    return {
+      ...base,
+      comment: {
+        version: 1,
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+      },
+    } as unknown as JiraWorklog;
+  }
+
+  it('emits one block per commented worklog, keyed by worklog ID', () => {
+    expect(worklogCommentBlocks([worklog('1', 'Paired on the payload bug')])).toEqual([
+      { label: 'worklog 1 comment', body: 'Paired on the payload bug' },
+    ]);
+  });
+
+  it('skips worklogs with no comment', () => {
+    expect(worklogCommentBlocks([worklog('1'), worklog('2', 'note')])).toEqual([
+      { label: 'worklog 2 comment', body: 'note' },
+    ]);
   });
 });

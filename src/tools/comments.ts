@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraComment, JiraCommentPage } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
-import { textResult, toonResult } from '@/format/response';
+import { markdownBlockResult, textResult, type MarkdownBlock } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -56,33 +56,35 @@ export function searchComments(comments: SearchableComment[], query: string): Se
   return fuse.search(query.trim()).map((result) => result.item);
 }
 
+/**
+ * Banner label carrying everything about a comment except its body, so author
+ * and timestamps stay next to the text they belong to.
+ */
+export function commentBlockLabel(comment: SearchableComment): string {
+  const edited = comment.updated !== comment.created ? `, edited ${comment.updated}` : '';
+  return `comment ${comment.id} (${comment.author}, ${comment.created}${edited})`;
+}
+
+/**
+ * Agent-facing comment page: a TOON envelope of pagination counters plus one
+ * Markdown block per comment. Bodies stay out of the envelope because TOON
+ * would collapse them onto one escaped physical line.
+ */
 export function commentsToAgentView(
   comments: SearchableComment[],
   total: number,
   startAt: number,
-): Record<string, unknown> {
+): { envelope: Record<string, unknown>; blocks: MarkdownBlock[] } {
   const end = startAt + comments.length;
-  const view: Record<string, unknown> = {
-    startAt,
-    end,
-    total,
-    comments: comments.map((comment) => {
-      const row: Record<string, unknown> = {
-        id: comment.id,
-        author: comment.author,
-        created: comment.created,
-        body: comment.body,
-      };
-      if (comment.updated !== comment.created) {
-        row['updated'] = comment.updated;
-      }
-      return row;
-    }),
-  };
+  const envelope: Record<string, unknown> = { startAt, end, total };
   if (end < total) {
-    view['nextStartAt'] = end;
+    envelope['nextStartAt'] = end;
   }
-  return view;
+  const blocks = comments.map((comment) => ({
+    label: commentBlockLabel(comment),
+    body: comment.body,
+  }));
+  return { envelope, blocks };
 }
 
 async function fetchAllComments(
@@ -120,8 +122,10 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
     'get_issue_comments',
     {
       description:
-        'Get comments on a Jira issue. Bodies are Markdown (converted from Jira ADF). ' +
-        'Response is TOON. Use sort to order by creation time, and search for fuzzy matching over author and body.',
+        'Get comments on a Jira issue. Returns a TOON envelope (startAt, end, total, nextStartAt) ' +
+        'followed by each comment body as Markdown under a "--- comment <id> (<author>, <created>) ---" banner. ' +
+        'Bodies are emitted verbatim with real line breaks, so they are never truncated or escaped. ' +
+        'Use sort to order by creation time, and search for fuzzy matching over author and body.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
         maxResults: z
@@ -157,7 +161,8 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
         const searchable = raw.map(toSearchableComment);
         const matched = searchComments(searchable, search);
         const page = matched.slice(offset, offset + limit);
-        return toonResult(commentsToAgentView(page, matched.length, offset));
+        const view = commentsToAgentView(page, matched.length, offset);
+        return markdownBlockResult(view.envelope, view.blocks);
       }
 
       const params = new URLSearchParams();
@@ -170,9 +175,12 @@ export function registerCommentTools(server: McpServer, client: JiraClient): voi
       const result = await client.get<JiraCommentPage>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment?${params.toString()}`,
       );
-      return toonResult(
-        commentsToAgentView(result.comments.map(toSearchableComment), result.total, result.startAt),
+      const view = commentsToAgentView(
+        result.comments.map(toSearchableComment),
+        result.total,
+        result.startAt,
       );
+      return markdownBlockResult(view.envelope, view.blocks);
     },
   );
 

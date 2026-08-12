@@ -11,8 +11,16 @@ The rich-text format at the agent boundary. Agents send Markdown for issue descr
 _Avoid_: rich text, HTML.
 
 **TOON**:
-The structured-data format the server returns to agents (lists, issue details, search hits, metadata). Chosen for token efficiency over JSON.
+The structured-data format the server returns to agents (lists, issue details, search hits, metadata). Chosen for token efficiency over JSON. TOON has no multi-line scalar, so it never carries a Markdown body - that goes in a Markdown block.
 _Avoid_: JSON output.
+
+**Envelope**:
+The TOON part of a response that also carries Markdown blocks - the structured fields and pagination counters, with all prose lifted out.
+_Avoid_: header, wrapper.
+
+**Markdown block**:
+A Markdown body emitted below the envelope, under its own banner, with real line breaks. Used for comment bodies, issue descriptions, and worklog comments. Keeps prose out of TOON, where line breaks would be escaped onto one physical line and cut by clients that cap line length.
+_Avoid_: section, chunk, prose field.
 
 ### Attachments
 
@@ -33,5 +41,5 @@ A property of a path download: the on-disk bytes equal the attachment's bytes as
 _Avoid_: exact copy, lossless.
 
 **Banner**:
-The `--- filename (mimeType) ---` header line prepended to **inline text** content only. It is never written to a path download.
+The `--- label ---` header line that opens an inline payload. Labels an **inline text** attachment as `--- filename (mimeType) ---`, and a Markdown block as `--- comment 742603 (Ada, 2026-01-01…) ---`, `--- description ---`, or `--- worklog 10001 comment ---`. It is never written to a path download.
 _Avoid_: header, prefix.

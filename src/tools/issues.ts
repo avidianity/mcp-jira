@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraChangelogPage, JiraIssue, JiraSearchResult, JiraUser } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
-import { textResult, toonResult } from '@/format/response';
+import { markdownBlockResult, textResult, toonResult, type MarkdownBlock } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -157,8 +157,15 @@ function userView(
   return view;
 }
 
-/** Agent-facing issue view: structured fields + Markdown description (never raw ADF). */
-export function issueToAgentView(issue: JiraIssue): Record<string, unknown> {
+/**
+ * Agent-facing issue view: a TOON envelope of structured fields plus the
+ * description as a Markdown block (never raw ADF). The description is kept out
+ * of the envelope because TOON would collapse it onto one escaped physical line.
+ */
+export function issueToAgentView(issue: JiraIssue): {
+  envelope: Record<string, unknown>;
+  blocks: MarkdownBlock[];
+} {
   const f = issue.fields;
   const baseUrl = issue.self.split('/rest/')[0] ?? '';
   const description = adfToMarkdown(f.description);
@@ -204,9 +211,6 @@ export function issueToAgentView(issue: JiraIssue): Record<string, unknown> {
       status: f.parent.fields.status.name,
     };
   }
-  if (description.length > 0) {
-    view['description'] = description;
-  }
   if (f.subtasks.length > 0) {
     view['subtasks'] = f.subtasks.map((subtask) => ({
       key: subtask.key,
@@ -235,7 +239,9 @@ export function issueToAgentView(issue: JiraIssue): Record<string, unknown> {
     view['links'] = links;
   }
 
-  return view;
+  const blocks: MarkdownBlock[] =
+    description.length > 0 ? [{ label: 'description', body: description }] : [];
+  return { envelope: view, blocks };
 }
 
 export function searchResultToAgentView(result: JiraSearchResult): Record<string, unknown> {
@@ -266,7 +272,9 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
     'get_issue',
     {
       description:
-        'Get detailed information about a Jira issue including summary, description (converted to Markdown), status, assignee, priority, labels, components, subtasks, and linked issues.',
+        'Get detailed information about a Jira issue including summary, status, assignee, priority, labels, components, subtasks, and linked issues. ' +
+        'Returns a TOON envelope of those fields, followed by the description as Markdown under a "--- description ---" banner ' +
+        '(emitted verbatim with real line breaks, so it is never truncated or escaped).',
       inputSchema: {
         issueKey: z
           .string()
@@ -278,7 +286,8 @@ export function registerIssueTools(server: McpServer, client: JiraClient): void 
       const issue = await client.get<JiraIssue>(
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}`,
       );
-      return toonResult(issueToAgentView(issue));
+      const view = issueToAgentView(issue);
+      return markdownBlockResult(view.envelope, view.blocks);
     },
   );
 

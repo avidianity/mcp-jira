@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { searchComments, sortToOrderBy, type SearchableComment } from '../src/tools/comments.ts';
+import {
+  commentBlockLabel,
+  commentsToAgentView,
+  searchComments,
+  sortToOrderBy,
+  type SearchableComment,
+} from '../src/tools/comments.ts';
+import { markdownBlockResult } from '../src/format/response.ts';
 
 function comment(
   overrides: Partial<SearchableComment> & Pick<SearchableComment, 'id'>,
@@ -51,5 +58,45 @@ describe('searchComments', () => {
 
   it('returns empty when nothing matches', () => {
     expect(searchComments(comments, 'zzzz-no-such-thing')).toEqual([]);
+  });
+});
+
+describe('commentBlockLabel', () => {
+  it('carries author and creation time next to the body', () => {
+    expect(commentBlockLabel(comment({ id: '742603', author: 'Cyril' }))).toBe(
+      'comment 742603 (Cyril, 2026-01-01T00:00:00.000+0000)',
+    );
+  });
+
+  it('notes the edit time only when the comment was edited', () => {
+    const edited = comment({ id: '1', updated: '2026-01-02T00:00:00.000+0000' });
+    expect(commentBlockLabel(edited)).toContain('edited 2026-01-02T00:00:00.000+0000');
+  });
+});
+
+describe('commentsToAgentView', () => {
+  it('keeps only pagination in the envelope and puts bodies in blocks', () => {
+    const view = commentsToAgentView([comment({ id: '1', body: 'line a\nline b' })], 3, 0);
+
+    expect(view.envelope).toEqual({ startAt: 0, end: 1, total: 3, nextStartAt: 1 });
+    expect(view.blocks).toEqual([
+      { label: 'comment 1 (Alice, 2026-01-01T00:00:00.000+0000)', body: 'line a\nline b' },
+    ]);
+  });
+
+  it('omits nextStartAt on the last page', () => {
+    const view = commentsToAgentView([comment({ id: '1' })], 1, 0);
+    expect(view.envelope['nextStartAt']).toBeUndefined();
+  });
+
+  it('renders a long body without escaping it onto one physical line', () => {
+    const body = Array.from({ length: 30 }, (_, i) => `note ${i} ${'y'.repeat(90)}`).join('\n');
+    const view = commentsToAgentView([comment({ id: '742603', body })], 1, 0);
+    const out = markdownBlockResult(view.envelope, view.blocks).content[0]?.text ?? '';
+
+    expect(out.length).toBeGreaterThan(2000);
+    expect(out).not.toContain('\\n');
+    expect(Math.max(...out.split('\n').map((line) => line.length))).toBeLessThan(200);
+    expect(out).toContain('note 29');
   });
 });

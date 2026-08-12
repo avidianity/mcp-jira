@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
 import type { JiraWorklog, JiraWorklogPage } from '@/jira/types';
 import { adfToMarkdown, markdownToAdf } from '@/jira/adf';
-import { textResult, toonResult } from '@/format/response';
+import { markdownBlockResult, textResult, type MarkdownBlock } from '@/format/response';
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -22,20 +22,32 @@ export function toJiraDateTime(input?: string): string {
 }
 
 function worklogToAgentView(wl: JiraWorklog): Record<string, unknown> {
-  const view: Record<string, unknown> = {
+  return {
     id: wl.id,
     author: wl.author.displayName,
     timeSpent: wl.timeSpent,
     timeSpentSeconds: wl.timeSpentSeconds,
     started: wl.started,
   };
-  if (wl.comment !== undefined) {
+}
+
+/**
+ * Worklog comments are Markdown, so they ride below the TOON table as blocks
+ * keyed by worklog ID - TOON would collapse a multi-paragraph note onto one
+ * escaped physical line. Worklogs without a comment contribute no block.
+ */
+export function worklogCommentBlocks(worklogs: JiraWorklog[]): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  for (const wl of worklogs) {
+    if (wl.comment === undefined) {
+      continue;
+    }
     const comment = adfToMarkdown(wl.comment);
     if (comment.length > 0) {
-      view['comment'] = comment;
+      blocks.push({ label: `worklog ${wl.id} comment`, body: comment });
     }
   }
-  return view;
+  return blocks;
 }
 
 export function registerWorklogTools(server: McpServer, client: JiraClient): void {
@@ -43,7 +55,8 @@ export function registerWorklogTools(server: McpServer, client: JiraClient): voi
     'get_worklogs',
     {
       description:
-        'Get work log entries (logged time) for a Jira issue, including who logged time, how much, when, and optional Markdown comments (TOON response).',
+        'Get work log entries (logged time) for a Jira issue - who logged time, how much, and when - as a TOON table. ' +
+        'Any worklog comment follows as Markdown under a "--- worklog <id> comment ---" banner.',
       inputSchema: {
         issueKey: z.string().regex(ISSUE_KEY_PATTERN).describe('The issue key (e.g., PROJ-123)'),
       },
@@ -53,11 +66,14 @@ export function registerWorklogTools(server: McpServer, client: JiraClient): voi
         `/rest/api/3/issue/${encodeURIComponent(issueKey)}/worklog`,
       );
 
-      return toonResult({
-        issueKey,
-        total: result.total,
-        worklogs: result.worklogs.map(worklogToAgentView),
-      });
+      return markdownBlockResult(
+        {
+          issueKey,
+          total: result.total,
+          worklogs: result.worklogs.map(worklogToAgentView),
+        },
+        worklogCommentBlocks(result.worklogs),
+      );
     },
   );
 

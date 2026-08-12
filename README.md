@@ -71,13 +71,43 @@ mcp-jira --transport http --port 5485
 
 Mentions in Markdown: `@[accountId]` or `@[Display Name|accountId]` (plain `@Name` is not a mention).
 
+### Why Markdown ships below the TOON, not inside it
+
+TOON has no multi-line scalar. A value containing line breaks is encoded as one
+quoted physical line with `\n` escapes, so a long comment or description becomes
+a single multi-thousand-character line - and clients that cap line length when
+rendering tool output silently drop its tail.
+
+Tools that return prose therefore split the response: structured fields stay in
+the TOON envelope, and each Markdown body follows below it under a banner, with
+real line breaks.
+
+```
+startAt: 0
+end: 2
+total: 12
+nextStartAt: 2
+
+--- comment 742603 (Cyril Reyes, 2025-08-10T14:22:11.000+0000) ---
+FROM STAGING:
+
+- first finding
+- second finding
+
+--- comment 742100 (Mekky, 2025-08-09T09:00:00.000+0000, edited 2025-08-09T11:04:00.000+0000) ---
+Short reply.
+```
+
+`get_issue` uses `--- description ---`, and `get_worklogs` uses
+`--- worklog <id> comment ---`.
+
 ## Tools
 
 ### Issues
 
 | Tool                    | Description                                                     |
 | ----------------------- | --------------------------------------------------------------- |
-| `get_issue`             | Full issue details (Markdown description, TOON response)        |
+| `get_issue`             | Full issue details (TOON fields + Markdown description block)   |
 | `search_issues`         | Search via JQL with pagination                                  |
 | `create_issue`          | Create issue; supports components, fixVersions, custom `fields` |
 | `update_issue`          | Update issue fields (same field support as create)              |
@@ -88,12 +118,12 @@ Mentions in Markdown: `@[accountId]` or `@[Display Name|accountId]` (plain `@Nam
 
 ### Comments
 
-| Tool                 | Description                                                |
-| -------------------- | ---------------------------------------------------------- |
-| `get_issue_comments` | List comments with IDs; optional `sort` and fuzzy `search` |
-| `add_comment`        | Add a comment (Markdown, supports `@[id]` mentions)        |
-| `update_comment`     | Edit an existing comment                                   |
-| `delete_comment`     | Delete a comment                                           |
+| Tool                 | Description                                                          |
+| -------------------- | -------------------------------------------------------------------- |
+| `get_issue_comments` | List comments as Markdown blocks; optional `sort` and fuzzy `search` |
+| `add_comment`        | Add a comment (Markdown, supports `@[id]` mentions)                  |
+| `update_comment`     | Edit an existing comment                                             |
+| `delete_comment`     | Delete a comment                                                     |
 
 ### Worklogs
 
