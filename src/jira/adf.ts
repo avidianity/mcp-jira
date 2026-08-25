@@ -138,18 +138,46 @@ function isImageFilename(filename: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
+function mediaFilename(node: AdfNode): string {
+  if (typeof node.attrs?.['alt'] === 'string') {
+    return node.attrs['alt'];
+  }
+  if (typeof node.attrs?.['__fileName'] === 'string') {
+    return node.attrs['__fileName'];
+  }
+  return '';
+}
+
+export function collectMediaFilenames(doc: AdfDocument | null, out: Map<string, string>): void {
+  if (doc === null) {
+    return;
+  }
+  walkMediaNodes(doc.content, out);
+}
+
+function walkMediaNodes(nodes: AdfNode[] | undefined, out: Map<string, string>): void {
+  if (nodes === undefined) {
+    return;
+  }
+  for (const node of nodes) {
+    if (node.type === 'media') {
+      const id = typeof node.attrs?.['id'] === 'string' ? node.attrs['id'] : undefined;
+      const filename = mediaFilename(node);
+      if (id !== undefined && filename !== '') {
+        out.set(id, filename);
+      }
+    }
+    walkMediaNodes(node.content, out);
+  }
+}
+
 function convertMediaNodes(nodes: AdfNode[]): string {
   const parts: string[] = [];
   for (const node of nodes) {
     if (node.type === 'media') {
       const id = typeof node.attrs?.['id'] === 'string' ? node.attrs['id'] : undefined;
       const mediaType = typeof node.attrs?.['type'] === 'string' ? node.attrs['type'] : 'file';
-      const filename =
-        typeof node.attrs?.['alt'] === 'string'
-          ? node.attrs['alt']
-          : typeof node.attrs?.['__fileName'] === 'string'
-            ? node.attrs['__fileName']
-            : '';
+      const filename = mediaFilename(node);
 
       if (
         id !== undefined &&

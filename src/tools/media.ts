@@ -4,8 +4,12 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JiraClient } from '@/jira/client';
-import type { JiraAttachment } from '@/jira/types';
+import { collectMediaFilenames } from '@/jira/adf';
+import type { AdfDocument, JiraAttachment, JiraCommentPage } from '@/jira/types';
 import { banner, textResult, toonResult, type ToolTextResult } from '@/format/response';
+
+const MEDIA_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
@@ -230,8 +234,61 @@ function pathResult(att: JiraAttachment, filePath: string): ToolTextResult {
 /** The subset of JiraClient that fetching a text attachment needs (kept small for testability). */
 export interface TextAttachmentClient {
   get<T>(path: string): Promise<T>;
-  downloadUrl(url: string, mimeType: string): Promise<{ base64: string; mimeType: string }>;
-  downloadUrlAsText(url: string): Promise<string>;
+  downloadAttachment(
+    attachmentId: string,
+    mimeType: string,
+  ): Promise<{ base64: string; mimeType: string }>;
+  downloadAttachmentAsText(attachmentId: string): Promise<string>;
+}
+
+export function findAttachment(
+  attachments: JiraAttachment[],
+  fileId: string,
+  mediaIdToFilename?: Map<string, string>,
+): JiraAttachment | undefined {
+  const direct = attachments.find(
+    (a) => a.id === fileId || a.mediaApiFileId === fileId || a.content.includes(fileId),
+  );
+  if (direct !== undefined) {
+    return direct;
+  }
+  const filename = mediaIdToFilename?.get(fileId);
+  if (filename === undefined) {
+    return undefined;
+  }
+  return attachments.find((a) => a.filename === filename);
+}
+
+export async function loadIssueAttachment(
+  client: Pick<TextAttachmentClient, 'get'>,
+  issueKey: string,
+  fileId: string,
+): Promise<JiraAttachment | undefined> {
+  const listed = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
+    `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
+  );
+  const attachments = listed.fields.attachment;
+  const direct = findAttachment(attachments, fileId);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!MEDIA_UUID_PATTERN.test(fileId)) {
+    return undefined;
+  }
+
+  const issue = await client.get<{
+    fields: {
+      description: AdfDocument | null;
+      comment?: JiraCommentPage;
+    };
+  }>(`/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=description,comment`);
+
+  const mediaIdToFilename = new Map<string, string>();
+  collectMediaFilenames(issue.fields.description, mediaIdToFilename);
+  for (const comment of issue.fields.comment?.comments ?? []) {
+    collectMediaFilenames(comment.body, mediaIdToFilename);
+  }
+  return findAttachment(attachments, fileId, mediaIdToFilename);
 }
 
 /**
@@ -245,13 +302,7 @@ export async function getTextAttachment(
   client: TextAttachmentClient,
   args: { issueKey: string; fileId: string; output: 'text' | 'path' },
 ): Promise<ToolTextResult> {
-  const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
-    `/rest/api/3/issue/${encodeURIComponent(args.issueKey)}?fields=attachment`,
-  );
-
-  const att = attachments.fields.attachment.find(
-    (a) => a.id === args.fileId || a.mediaApiFileId === args.fileId,
-  );
+  const att = await loadIssueAttachment(client, args.issueKey, args.fileId);
 
   if (att === undefined) {
     return attachmentNotFound(args.issueKey, args.fileId);
@@ -266,12 +317,12 @@ export async function getTextAttachment(
 
   if (args.output === 'path') {
     // Path mode is byte-faithful: use the raw byte path, never the text decoder.
-    const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+    const { base64 } = await client.downloadAttachment(att.id, att.mimeType);
     const filePath = await writeAttachmentToTemp(att, base64);
     return pathResult(att, filePath);
   }
 
-  const text = await client.downloadUrlAsText(att.content);
+  const text = await client.downloadAttachmentAsText(att.id);
   return textResult(`${banner(`${att.filename} (${att.mimeType})`)}\n${text}`);
 }
 
@@ -295,13 +346,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       },
     },
     async ({ issueKey, fileId, output }) => {
-      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
-        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
-      );
-
-      const att = attachments.fields.attachment.find(
-        (a) => a.id === fileId || a.mediaApiFileId === fileId,
-      );
+      const att = await loadIssueAttachment(client, issueKey, fileId);
 
       if (att === undefined) {
         return attachmentNotFound(issueKey, fileId);
@@ -314,7 +359,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
         );
       }
 
-      const { base64, mimeType } = await client.downloadUrl(att.content, att.mimeType);
+      const { base64, mimeType } = await client.downloadAttachment(att.id, att.mimeType);
       if (output === 'path') {
         const filePath = await writeAttachmentToTemp(att, base64);
         return pathResult(att, filePath);
@@ -407,13 +452,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       },
     },
     async ({ issueKey, fileId, output }) => {
-      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
-        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
-      );
-
-      const att = attachments.fields.attachment.find(
-        (a) => a.id === fileId || a.mediaApiFileId === fileId,
-      );
+      const att = await loadIssueAttachment(client, issueKey, fileId);
 
       if (att === undefined) {
         return attachmentNotFound(issueKey, fileId);
@@ -426,7 +465,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
         );
       }
 
-      const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+      const { base64 } = await client.downloadAttachment(att.id, att.mimeType);
       if (output === 'path') {
         const filePath = await writeAttachmentToTemp(att, base64);
         return pathResult(att, filePath);
@@ -454,13 +493,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
       },
     },
     async ({ issueKey, fileId, output }) => {
-      const attachments = await client.get<{ fields: { attachment: JiraAttachment[] } }>(
-        `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=attachment`,
-      );
-
-      const att = attachments.fields.attachment.find(
-        (a) => a.id === fileId || a.mediaApiFileId === fileId,
-      );
+      const att = await loadIssueAttachment(client, issueKey, fileId);
 
       if (att === undefined) {
         return attachmentNotFound(issueKey, fileId);
@@ -487,7 +520,7 @@ export function registerMediaTools(server: McpServer, client: JiraClient): void 
         );
       }
 
-      const { base64 } = await client.downloadUrl(att.content, att.mimeType);
+      const { base64 } = await client.downloadAttachment(att.id, att.mimeType);
       if (output === 'path') {
         const filePath = await writeAttachmentToTemp(att, base64);
         return pathResult(att, filePath);

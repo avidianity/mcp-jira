@@ -133,40 +133,46 @@ export class JiraClient {
       content: string;
     }>(`/rest/api/3/attachment/${attachmentId}`);
 
-    return this.downloadUrl(meta.content, meta.mimeType);
+    return this.downloadAttachment(attachmentId, meta.mimeType);
+  }
+
+  attachmentContentUrl(attachmentId: string): string {
+    return `${this.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}?redirect=false`;
+  }
+
+  async downloadAttachment(
+    attachmentId: string,
+    mimeType: string,
+  ): Promise<{ base64: string; mimeType: string }> {
+    const response = await this.fetchAttachment(attachmentId);
+    const buffer = await response.arrayBuffer();
+    return { base64: Buffer.from(buffer).toString('base64'), mimeType };
+  }
+
+  async downloadAttachmentAsText(attachmentId: string): Promise<string> {
+    const response = await this.fetchAttachment(attachmentId);
+    return await response.text();
   }
 
   async downloadUrl(url: string, mimeType: string): Promise<{ base64: string; mimeType: string }> {
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const response = await fetch(url, {
-        headers: { Authorization: this.authHeader },
-      });
-
-      if (response.status === 429) {
-        if (attempt === MAX_RETRIES) {
-          throw new Error(`Jira API rate limited after ${String(MAX_RETRIES)} retries`);
-        }
-        const retryAfter = response.headers.get('Retry-After');
-        const waitMs = retryAfter !== null ? parseInt(retryAfter, 10) * 1000 : 1000 * (attempt + 1);
-        await sleep(waitMs);
-        continue;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Failed to download (${String(response.status)})`);
-      }
-
-      const buffer = await response.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString('base64');
-      return { base64, mimeType };
-    }
-
-    throw new Error('Exhausted retries without returning');
+    const response = await this.fetchBinary(url, url);
+    const buffer = await response.arrayBuffer();
+    return { base64: Buffer.from(buffer).toString('base64'), mimeType };
   }
 
   async downloadUrlAsText(url: string): Promise<string> {
+    const response = await this.fetchBinary(url, url);
+    return await response.text();
+  }
+
+  private async fetchAttachment(attachmentId: string): Promise<Response> {
+    return this.fetchBinary(this.attachmentContentUrl(attachmentId), attachmentId);
+  }
+
+  private async fetchBinary(url: string, label: string): Promise<Response> {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const response = await fetch(url, {
+        redirect: 'manual',
         headers: { Authorization: this.authHeader },
       });
 
@@ -180,11 +186,21 @@ export class JiraClient {
         continue;
       }
 
-      if (!response.ok) {
-        throw new Error(`Failed to download (${String(response.status)})`);
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('Location') ?? '';
+        throw new Error(
+          `Failed to download attachment ${label} (${String(response.status)}): redirected to ${location}`,
+        );
       }
 
-      return await response.text();
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(
+          `Failed to download attachment ${label} (${String(response.status)}): ${body}`,
+        );
+      }
+
+      return response;
     }
 
     throw new Error('Exhausted retries without returning');
