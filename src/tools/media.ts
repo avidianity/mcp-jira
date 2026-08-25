@@ -8,8 +8,7 @@ import { collectMediaFilenames } from '@/jira/adf';
 import type { AdfDocument, JiraAttachment, JiraCommentPage } from '@/jira/types';
 import { banner, textResult, toonResult, type ToolTextResult } from '@/format/response';
 
-const MEDIA_UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MEDIA_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+-\d+$/i;
 

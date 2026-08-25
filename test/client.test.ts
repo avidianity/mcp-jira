@@ -53,8 +53,7 @@ describe('JiraClient attachment download', () => {
   });
 
   it('includes status and body when a download fails', async () => {
-    globalThis.fetch = (async () =>
-      new Response('nope', { status: 403 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response('nope', { status: 403 })) as typeof fetch;
 
     const client = new JiraClient(config);
     await expect(client.downloadAttachment('42', 'image/png')).rejects.toThrow(
